@@ -14,7 +14,10 @@ const allowed = {
     'media.githubusercontent.com': ['/media/buildingsmart-community/Community-Sample-Test-Files/'],
   },
 
-  sketchfab: { 'api.sketchfab.com': ['/v3/'] },
+  sketchfab: {
+    'api.sketchfab.com': ['/v3/'],
+    'sketchfab-prod-media.s3.amazonaws.com': ['/archives/'],
+  },
   smithsonian: { '3d-api.si.edu': ['/api/v1.0/content/file/search', '/content/document/'] },
   polyhaven: {
     'api.polyhaven.com': ['/'],

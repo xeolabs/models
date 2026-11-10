@@ -43,14 +43,20 @@ async function body(request: IncomingMessage) {
   }
 }
 export async function startModelBrowser(options: BrowserServerOptions) {
+  const access = new ServerAccessPolicy(options);
   const library = await ModelsLibrary.open({
-      root: options.root,
-      xeoIFC: options.xeoIFC,
-      processingWorker: true,
-    }),
-    access = new ServerAccessPolicy(options),
-    acquisition = new AcquisitionRoutes(library, options.acquisition),
-    uploads = new UploadSessions(),
+    root: options.root,
+    xeoIFC: options.xeoIFC,
+    processingWorker: true,
+  });
+  let acquisition: AcquisitionRoutes;
+  try {
+    acquisition = new AcquisitionRoutes(library, options.root, options.acquisition);
+  } catch (error) {
+    await library.close();
+    throw error;
+  }
+  const uploads = new UploadSessions(),
     processing = new ProcessingRoutes(library);
   const properties = new PropertyRoutes(library);
   const json = (r: ServerResponse, data: unknown, status = 200) => {

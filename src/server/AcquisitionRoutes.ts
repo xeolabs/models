@@ -1,3 +1,5 @@
+import { SketchfabAuthentication } from './SketchfabAuthentication.js';
+import { ProviderHttpClient } from '../providers/ProviderHttpClient.js';
 import { ProviderPreviews } from './ProviderPreviews.js';
 import { providerInfo } from '../providers/ProviderInfo.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -38,11 +40,15 @@ async function body(request: IncomingMessage) {
  */
 export class AcquisitionRoutes {
   private readonly previews: ProviderPreviews;
+  private readonly authentication: SketchfabAuthentication;
   constructor(
     private readonly library: ModelsLibrary,
+    libraryRoot: string,
     private readonly options: AcquisitionServiceOptions = {},
   ) {
     this.previews = new ProviderPreviews(options);
+    this.authentication = new SketchfabAuthentication(libraryRoot, new ProviderHttpClient(options));
+    this.options = { ...options, sketchfabCredential: () => this.authentication.credential() };
   }
   async close() {
     await this.previews.close();
@@ -60,6 +66,22 @@ export class AcquisitionRoutes {
       fail('INVALID_PLAN', 'Acquisition request: unsupported method');
     if (request.method === 'POST' && request.headers['x-models-action'] !== 'explicit')
       fail('CONFLICT', 'Acquisition request: an explicit app action is required');
+    if (url.pathname === '/api/acquisition/sketchfab/auth') {
+      send(
+        request.method === 'POST'
+          ? await this.authentication.connect(await body(request))
+          : this.authentication.status(),
+      );
+      return true;
+    }
+    if (url.pathname === '/api/acquisition/sketchfab/verify' && request.method === 'POST') {
+      send(await this.authentication.verify());
+      return true;
+    }
+    if (url.pathname === '/api/acquisition/sketchfab/disconnect' && request.method === 'POST') {
+      send(this.authentication.disconnect());
+      return true;
+    }
     const a = await this.library.acquisition(this.options),
       route = url.pathname.slice('/api/acquisition'.length);
     const query = {
@@ -68,7 +90,7 @@ export class AcquisitionRoutes {
     };
     if (request.method === 'GET') {
       if (route === '/providers') {
-        send(a.providers.list().map((p) => providerInfo[p.id]));
+        send(a.providers.list().map((p) => p.getInfo?.() ?? providerInfo[p.id]));
         return true;
       }
       if (route === '/search') {

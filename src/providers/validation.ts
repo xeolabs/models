@@ -1,9 +1,17 @@
 import { z } from 'zod';
 import { fail } from '../domain/ModelsError.js';
-export function response<T extends z.ZodTypeAny>(schema: T, value: unknown): z.output<T> {
+import { providerValidationMessage } from './providerValidationMessage.js';
+export function response<T extends z.ZodTypeAny>(
+  schema: T,
+  value: unknown,
+  context = 'Provider response',
+): z.output<T> {
   const parsed = schema.safeParse(value);
   if (!parsed.success)
-    fail('INVALID_PROVIDER_RESPONSE', 'Provider response: required fields have unexpected types');
+    fail(
+      'INVALID_PROVIDER_RESPONSE',
+      `${context}: ${providerValidationMessage(parsed.error.issues)}`,
+    );
   return parsed.data;
 }
 export const remoteIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,150}$/);

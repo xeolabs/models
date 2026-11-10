@@ -1,3 +1,4 @@
+import type { SketchfabCredentialSource } from './SketchfabCredential.js';
 import { BuildingSmartProvider } from './BuildingSmartProvider.js';
 import { BuildingSmartCommunityProvider } from './BuildingSmartCommunityProvider.js';
 import { providerIds } from './ProviderInfo.js';
@@ -9,11 +10,11 @@ import { fail } from '../domain/ModelsError.js';
 import type { ModelProvider, ProviderId } from './types.js';
 export class ProviderRegistry {
   private readonly providers = new Map<ProviderId, ModelProvider>();
-  constructor(http = new ProviderHttpClient()) {
+  constructor(http = new ProviderHttpClient(), sketchfabCredential?: SketchfabCredentialSource) {
     this.register(new BuildingSmartProvider(http));
     this.register(new BuildingSmartCommunityProvider(http));
     this.register(new PolyHavenProvider(http));
-    this.register(new SketchfabProvider(http));
+    this.register(new SketchfabProvider(http, sketchfabCredential));
     this.register(new SmithsonianProvider(http));
   }
   get(id: ProviderId) {

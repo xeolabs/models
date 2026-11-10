@@ -71,6 +71,12 @@ export interface ProviderSearchResult {
   total?: number;
 }
 export interface ModelProvider {
+  getInfo?(): import('./ProviderInfo.js').ProviderInfo;
+
+  /**
+   * Resolve a temporary transfer URL without changing a plan's stable file identity.
+   */
+  resolveDownload?(file: ProviderDownloadFile, signal?: AbortSignal): Promise<string>;
   readonly id: ProviderId;
   search(query: ProviderSearchQuery): Promise<ProviderSearchResult>;
   getModel(remoteId: string): Promise<ProviderModel>;

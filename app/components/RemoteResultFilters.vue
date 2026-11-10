@@ -69,10 +69,6 @@ const remote = useAcquisition();
             value="polygons" /></el-select
       ></label>
     </div>
-    <p class="section-note">
-      Download sizes include the model and supporting files. Poly Haven sizes refer to textures;
-      Smithsonian variants refer to model quality. Unknown values are excluded when a limit is set.
-    </p>
     <div class="result-filter-actions">
       <span
         >{{ remote.visibleResults.length }} of {{ remote.results.length }} results<span
@@ -90,12 +86,14 @@ const remote = useAcquisition();
         @click="remote.selectVisible"
         >Select matching</el-button
       ><el-button v-if="remote.filtersActive" @click="remote.resetFilters">Clear filters</el-button>
+      <el-button
+        v-if="Object.keys(remote.statisticsErrors).length"
+        @click="remote.refreshStatistics"
+        >Retry size lookup</el-button
+      >
     </div>
     <p v-if="remote.selectionNotice" role="status" class="section-note">
       {{ remote.selectionNotice }}
     </p>
-    <el-button v-if="Object.keys(remote.statisticsErrors).length" @click="remote.refreshStatistics"
-      >Retry size lookup</el-button
-    >
   </details>
 </template>

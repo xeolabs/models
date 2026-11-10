@@ -82,6 +82,8 @@ export class AcquisitionPlanner {
         `Plan model: ${provider}/${remoteId} has no ${resolution} download in the requested format`,
       );
     const { files, warnings } = new ProviderModelMapper().select(model, download);
+    // A plan records its selected files, not the search card's list of alternatives.
+    const { downloadOptions: _alternatives, ...snapshot } = model;
     return {
       id: randomUUID(),
       ordinal,
@@ -101,7 +103,7 @@ export class AcquisitionPlanner {
         download.format,
       ),
       warnings,
-      model,
+      model: snapshot,
     };
   }
   private async resolveSizes(
@@ -177,7 +179,7 @@ export class AcquisitionPlanner {
     if (!parsed.success) fail('INVALID_PLAN', 'Create plan: invalid acquisition criteria');
     const criteria = parsed.data;
     for (const id of criteria.providers)
-      if (providerInfo[id].acquisition !== 'direct')
+      if ((this.providers.get(id).getInfo?.() ?? providerInfo[id]).acquisition !== 'direct')
         fail('DOWNLOAD_OPTION_NOT_FOUND', providerInfo[id].name + ': ' + providerInfo[id].notice);
     criteria.providers = [...new Set(criteria.providers)].sort();
     criteria.tags = criteria.tags

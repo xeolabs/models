@@ -48,7 +48,7 @@ export class DownloadCache {
       remoteId: item.remoteId,
       resolution: item.resolution,
       format: item.format,
-      revision: item.model.metadata?.filesHash,
+      revision: item.model.metadata?.filesHash ?? item.model.metadata?.updatedAt,
       file,
     });
   }

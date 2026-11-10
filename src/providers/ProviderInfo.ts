@@ -31,8 +31,7 @@ export const providerInfo: Readonly<Record<ProviderId, ProviderInfo>> = {
     id: 'sketchfab',
     name: 'Sketchfab',
     acquisition: 'website',
-    notice:
-      'Search and compare here. Downloads require signing in on Sketchfab; direct in-app downloads are not connected.',
+    notice: 'Configure your Sketchfab account to import models here.',
   },
   smithsonian: {
     id: 'smithsonian',

@@ -220,7 +220,7 @@ export function validatePlan(value: unknown): AcquisitionPlan {
   const seen = new Set<string>();
   let reservation = 0;
   for (const [ordinal, item] of p.items.entries()) {
-    if (!acquisitionProviderIds.includes(item.provider))
+    if (![...acquisitionProviderIds, 'sketchfab'].includes(item.provider))
       fail('INVALID_PLAN', 'Acquisition plan: provider supports website downloads only');
     const key = [item.provider, item.remoteId, item.resolution].join(':');
     if (

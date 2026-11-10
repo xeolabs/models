@@ -179,6 +179,9 @@ export const useAcquisition = defineStore('acquisition', () => {
       if (!current.signal.aborted) searching.value = false;
     }
   }
+  async function refreshProviders() {
+    providers.value = await api.providers();
+  }
   async function refresh() {
     await action(async () => {
       const [p, j, available] = await Promise.all([api.plans(), api.jobs(), api.providers()]);
@@ -343,6 +346,7 @@ export const useAcquisition = defineStore('acquisition', () => {
     clearTimeout(timer);
   }
   return {
+    refreshProviders,
     providers,
     visibleResults,
     filtersActive,

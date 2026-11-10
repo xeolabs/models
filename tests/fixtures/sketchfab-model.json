@@ -1,0 +1,226 @@
+{
+  "animationCount": 0,
+  "categories": [
+    {
+      "uid": "d7cebaeca8604ebab1480e413404b679",
+      "name": "Electronics & Gadgets",
+      "slug": "electronics-gadgets",
+      "uri": "https://api.sketchfab.com/v3/categories/d7cebaeca8604ebab1480e413404b679",
+      "icon": "https://static.sketchfab.com/static/builds/web/dist/static/assets/images/icons/categories/336c224334b7e53e277d236a8355e90a-v2.svg",
+      "thumbnails": [
+        {
+          "width": "512",
+          "height": "288",
+          "url": "https://static.sketchfab.com/categories/d7cebaeca8604ebab1480e413404b679/512x288.png"
+        },
+        {
+          "width": "800",
+          "height": "450",
+          "url": "https://static.sketchfab.com/categories/d7cebaeca8604ebab1480e413404b679/800x450.png"
+        }
+      ]
+    },
+    {
+      "uid": "17d20ca7b35243d4a45171838b50704c",
+      "name": "Science & Technology",
+      "slug": "science-technology",
+      "uri": "https://api.sketchfab.com/v3/categories/17d20ca7b35243d4a45171838b50704c",
+      "icon": "https://static.sketchfab.com/static/builds/web/dist/static/assets/images/icons/categories/86b1bae49e0ed3f43b2d59b26700234e-v2.svg",
+      "thumbnails": [
+        {
+          "width": "512",
+          "height": "288",
+          "url": "https://static.sketchfab.com/categories/17d20ca7b35243d4a45171838b50704c/512x288.png"
+        },
+        {
+          "width": "800",
+          "height": "450",
+          "url": "https://static.sketchfab.com/categories/17d20ca7b35243d4a45171838b50704c/800x450.png"
+        }
+      ]
+    }
+  ],
+  "commentCount": 13,
+  "createdAt": "2024-07-31T21:42:09.664203",
+  "embedUrl": "https://sketchfab.com/models/c741dcd8720f4a629de8681bdcd4529b/embed",
+  "faceCount": 256383,
+  "isAgeRestricted": false,
+  "license": {
+    "uri": "https://api.sketchfab.com/v3/licenses/322a749bcfa841b29dff1e8a1bb74b0b",
+    "label": "CC Attribution",
+    "fullName": "Creative Commons Attribution",
+    "requirements": "Author must be credited. Commercial use is allowed.",
+    "url": "http://creativecommons.org/licenses/by/4.0/",
+    "slug": "by"
+  },
+  "likeCount": 509,
+  "name": "Scifi Chair Concept",
+  "publishedAt": "2024-07-31T22:21:59.968264",
+  "soundCount": 0,
+  "staffpickedAt": "2024-08-07T12:59:07.702032",
+  "tags": [
+    {
+      "name": "kit",
+      "slug": "kit",
+      "uri": "https://api.sketchfab.com/v3/tags/kit"
+    },
+    {
+      "name": "lab",
+      "slug": "lab",
+      "uri": "https://api.sketchfab.com/v3/tags/lab"
+    },
+    {
+      "name": "prop",
+      "slug": "prop",
+      "uri": "https://api.sketchfab.com/v3/tags/prop"
+    },
+    {
+      "name": "cyberpunk",
+      "slug": "cyberpunk",
+      "uri": "https://api.sketchfab.com/v3/tags/cyberpunk"
+    },
+    {
+      "name": "pilot",
+      "slug": "pilot",
+      "uri": "https://api.sketchfab.com/v3/tags/pilot"
+    },
+    {
+      "name": "texture",
+      "slug": "texture",
+      "uri": "https://api.sketchfab.com/v3/tags/texture"
+    },
+    {
+      "name": "scifi",
+      "slug": "scifi",
+      "uri": "https://api.sketchfab.com/v3/tags/scifi"
+    },
+    {
+      "name": "chair",
+      "slug": "chair",
+      "uri": "https://api.sketchfab.com/v3/tags/chair"
+    },
+    {
+      "name": "design",
+      "slug": "design",
+      "uri": "https://api.sketchfab.com/v3/tags/design"
+    },
+    {
+      "name": "sci-fi",
+      "slug": "sci-fi",
+      "uri": "https://api.sketchfab.com/v3/tags/sci-fi"
+    },
+    {
+      "name": "hardsurface",
+      "slug": "hardsurface",
+      "uri": "https://api.sketchfab.com/v3/tags/hardsurface"
+    },
+    {
+      "name": "medical",
+      "slug": "medical",
+      "uri": "https://api.sketchfab.com/v3/tags/medical"
+    },
+    {
+      "name": "space",
+      "slug": "space",
+      "uri": "https://api.sketchfab.com/v3/tags/space"
+    }
+  ],
+  "thumbnails": {
+    "images": [
+      {
+        "uid": "8cfb7380ea9f4981a0f40893e0f44238",
+        "width": 1920,
+        "height": 1080,
+        "size": 125249,
+        "url": "https://media.sketchfab.com/models/c741dcd8720f4a629de8681bdcd4529b/thumbnails/efa67debbcde46e6abcd200a98e1b44d/eb0ae7f144b3447f98d586555a15e5d1.jpeg"
+      },
+      {
+        "uid": "38608ca2927944bd9c5bcf59db601fc0",
+        "width": 1024,
+        "height": 576,
+        "size": 39137,
+        "url": "https://media.sketchfab.com/models/c741dcd8720f4a629de8681bdcd4529b/thumbnails/efa67debbcde46e6abcd200a98e1b44d/a3b8817e014f49f4bfaf45e176963cde.jpeg"
+      },
+      {
+        "uid": "a058abac68f54a8785772840a4a09f79",
+        "width": 720,
+        "height": 405,
+        "size": 22061,
+        "url": "https://media.sketchfab.com/models/c741dcd8720f4a629de8681bdcd4529b/thumbnails/efa67debbcde46e6abcd200a98e1b44d/5909bf9af22442388cac1ce9ec7d3449.jpeg"
+      },
+      {
+        "uid": "c73dd4d51de647fa82c88bc7451966b3",
+        "width": 256,
+        "height": 144,
+        "size": 4459,
+        "url": "https://media.sketchfab.com/models/c741dcd8720f4a629de8681bdcd4529b/thumbnails/efa67debbcde46e6abcd200a98e1b44d/3904d601f9c54cfcab18f06efbf89d17.jpeg"
+      },
+      {
+        "uid": "7ae3eb0f67e54a59a3aa04fd9369c4f7",
+        "width": 64,
+        "height": 36,
+        "size": 1090,
+        "url": "https://media.sketchfab.com/models/c741dcd8720f4a629de8681bdcd4529b/thumbnails/efa67debbcde46e6abcd200a98e1b44d/d48b7bb925404e1aa16aeb3211d4f67d.jpeg"
+      }
+    ]
+  },
+  "uid": "c741dcd8720f4a629de8681bdcd4529b",
+  "uri": "https://api.sketchfab.com/v3/models/c741dcd8720f4a629de8681bdcd4529b",
+  "user": {
+    "uid": "a1103fac2029470b821d4de6e8efe65a",
+    "username": "Seesha",
+    "displayName": "Seesha",
+    "account": "basic",
+    "profileUrl": "https://sketchfab.com/Seesha",
+    "avatar": {
+      "uid": "14abdc546376479181df34f47bf9ec5b",
+      "uri": "https://api.sketchfab.com/v3/avatars/14abdc546376479181df34f47bf9ec5b",
+      "images": [
+        {
+          "width": 32,
+          "height": 32,
+          "size": 941,
+          "url": "https://media.sketchfab.com/avatars/14abdc546376479181df34f47bf9ec5b/4dfd296a340a42f1884b097b33246777.jpeg"
+        },
+        {
+          "width": 48,
+          "height": 48,
+          "size": 1226,
+          "url": "https://media.sketchfab.com/avatars/14abdc546376479181df34f47bf9ec5b/f46298f97da04a90b25139d8de6afef8.jpeg"
+        },
+        {
+          "width": 90,
+          "height": 90,
+          "size": 2367,
+          "url": "https://media.sketchfab.com/avatars/14abdc546376479181df34f47bf9ec5b/fab99a1c46bc4c969e060474f9ef9fc7.jpeg"
+        },
+        {
+          "width": 100,
+          "height": 100,
+          "size": 2697,
+          "url": "https://media.sketchfab.com/avatars/14abdc546376479181df34f47bf9ec5b/0adefdf787484933899af77793c92f60.jpeg"
+        }
+      ]
+    },
+    "uri": "https://api.sketchfab.com/v3/users/a1103fac2029470b821d4de6e8efe65a"
+  },
+  "vertexCount": 132175,
+  "viewCount": 11993,
+  "viewerUrl": "https://sketchfab.com/3d-models/scifi-chair-concept-c741dcd8720f4a629de8681bdcd4529b",
+  "isDownloadable": true,
+  "isProtected": false,
+  "description": "Hey whatsup\nSimple scifi (little bir retrofuture) chair concept\njust exoplorations and searching for less annoying pipeline\npipeline: blender (modeling) >>>>3dcoat (paint) >>>> blender (checking + some additional fixes) \nprop has 8k textures\ndraft uv unwraps\n\n\ndownload, star, follow",
+  "price": null,
+  "downloadCount": 3027,
+  "editorUrl": "https://sketchfab.com/models/c741dcd8720f4a629de8681bdcd4529b/edit",
+  "status": {
+    "warning": {},
+    "processing": "SUCCEEDED"
+  },
+  "source": "website",
+  "hasCommentsDisabled": false,
+  "updatedAt": "2024-07-31T22:22:00.117292",
+  "pbrType": "metalness",
+  "textureCount": 5,
+  "materialCount": 1
+}

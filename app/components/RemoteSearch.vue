@@ -4,6 +4,8 @@ import RemoteResultFilters from './RemoteResultFilters.vue';
 import ProviderThumbnail from './ProviderThumbnail.vue';
 import { ElInputNumber, ElCheckbox } from 'element-plus';
 import { Search, ExternalLink } from 'lucide-vue-next';
+import { useProviderAccounts } from '../stores/providerAccounts';
+const accounts = useProviderAccounts();
 import { useAcquisition } from '../stores/acquisition';
 const remote = useAcquisition();
 </script>
@@ -27,10 +29,12 @@ const remote = useAcquisition();
       </el-select>
       <el-button native-type="submit" type="primary" :loading="remote.searching">Search</el-button>
     </form>
-    <p class="section-note">
-      Discover downloadable models across providers. Check each model’s license. Review a plan
-      before importing; website downloads are marked below.
-    </p>
+    <el-button
+      v-if="remote.provider === 'sketchfab'"
+      class="provider-authentication-button"
+      @click="accounts.open = true"
+      >Sketchfab authentication</el-button
+    >
     <p
       v-for="failure in remote.providerErrors"
       :key="failure.provider"

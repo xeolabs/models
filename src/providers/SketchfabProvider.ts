@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { ProviderHttpClient } from './ProviderHttpClient.js';
-import { response, cc0 } from './validation.js';
+import { SketchfabDownloadAccess } from './SketchfabDownloadAccess.js';
+import { providerInfo } from './ProviderInfo.js';
+import type { SketchfabCredentialSource } from './SketchfabCredential.js';
+import type { ProviderDownloadFile } from './types.js';
+import { response, cc0, ccBy } from './validation.js';
 import { providerUrl } from './HostPolicy.js';
 import { fail } from '../domain/ModelsError.js';
 import type {
@@ -11,6 +15,16 @@ import type {
   ProviderDownloadSummary,
 } from './types.js';
 const uid = z.string().regex(/^[a-f0-9]{32}$/);
+const licenseUriSchema = z
+  .string()
+  .regex(/^https:\/\/api\.sketchfab\.com\/v3\/licenses\/[a-f0-9]{32}$/);
+
+// Search results use a license UID; model details use the full license URI.
+// Require one of those identities so a display label cannot determine licensing.
+const licenseReferenceSchema = z.union([
+  z.object({ uid, uri: licenseUriSchema.optional(), label: z.string() }),
+  z.object({ uid: uid.optional(), uri: licenseUriSchema, label: z.string() }),
+]);
 const archive = z
   .object({
     size: z.number().nonnegative().nullable().optional(),
@@ -28,10 +42,11 @@ const modelSchema = z
     faceCount: z.number().int().nonnegative().optional(),
     vertexCount: z.number().int().nonnegative().optional(),
     publishedAt: z.string().optional(),
+    updatedAt: z.string().optional(),
     tags: z.array(z.object({ name: z.string() })).default([]),
     categories: z.array(z.object({ name: z.string() })).default([]),
     user: z.object({ displayName: z.string().optional(), username: z.string() }).optional(),
-    license: z.object({ uid, label: z.string() }).nullable(),
+    license: licenseReferenceSchema.nullable(),
     thumbnails: z.object({
       images: z.array(z.object({ url: z.string().url(), width: z.number(), height: z.number() })),
     }),
@@ -40,25 +55,57 @@ const modelSchema = z
   .passthrough();
 const licenseSchema = z.object({
   results: z.array(
-    z.object({ uri: z.string().url(), slug: z.string(), label: z.string(), url: z.string().url() }),
+    z.object({ uri: licenseUriSchema, slug: z.string(), label: z.string(), url: z.string().url() }),
   ),
 });
 
 /**
- * Public discovery does not create a download URL. Sketchfab requires an authenticated
- * end user for downloads, so this adapter offers the provider's download page instead.
+ * Public discovery remains available without signing in. Downloads use the
+ * configured account and preserve stable file identities in saved plans.
  */
 export class SketchfabProvider implements ModelProvider {
   readonly id = 'sketchfab' as const;
-  constructor(private readonly http = new ProviderHttpClient()) {}
+  private readonly downloads: SketchfabDownloadAccess;
+  constructor(
+    private readonly http = new ProviderHttpClient(),
+    credential: SketchfabCredentialSource = () => undefined,
+  ) {
+    this.downloads = new SketchfabDownloadAccess(http, credential);
+  }
+  getInfo() {
+    return this.downloads.connected()
+      ? {
+          ...providerInfo.sketchfab,
+          acquisition: 'direct' as const,
+          notice: 'Configured. Import glTF archives; CC0 and CC BY 4.0 are supported.',
+        }
+      : {
+          ...providerInfo.sketchfab,
+          notice: 'Configure your Sketchfab account to import models here.',
+        };
+  }
+  refresh() {
+    this.http.refresh();
+  }
+  resolveDownload(file: ProviderDownloadFile, signal?: AbortSignal) {
+    return this.downloads.resolve(file, signal);
+  }
   private async normalize(raw: z.infer<typeof modelSchema>): Promise<ProviderModel> {
     if (!raw.isDownloadable || !raw.license)
       fail('REMOTE_MODEL_NOT_FOUND', 'Sketchfab: model is not publicly downloadable');
     const licenses = response(
       licenseSchema,
       await this.http.json(this.id, 'https://api.sketchfab.com/v3/licenses'),
+      'Sketchfab licenses response',
     ).results;
-    const license = licenses.find((value) => value.uri.endsWith('/' + raw.license!.uid));
+    const reference = raw.license;
+    const licenseUri = reference.uri ?? `https://api.sketchfab.com/v3/licenses/${reference.uid}`;
+    if (reference.uid && licenseUri !== `https://api.sketchfab.com/v3/licenses/${reference.uid}`)
+      fail(
+        'INVALID_PROVIDER_RESPONSE',
+        'Sketchfab license: uid and uri refer to different licenses',
+      );
+    const license = licenses.find((value) => value.uri === licenseUri);
     if (!license) fail('UNSUPPORTED_LICENSE', 'Sketchfab: license metadata is unavailable');
     const preview =
       raw.thumbnails.images
@@ -90,15 +137,19 @@ export class SketchfabProvider implements ModelProvider {
       previewUrl: preview?.url,
       author: raw.user?.displayName ?? raw.user?.username,
       publishedAt: raw.publishedAt,
+      ...(raw.updatedAt ? { metadata: { updatedAt: raw.updatedAt } } : {}),
       license:
         license.slug === 'cc0'
           ? { ...cc0 }
-          : {
-              id: license.slug,
-              name: license.label,
-              url: license.url,
-              attributionRequired: license.slug.startsWith('by'),
-            },
+          : license.slug === 'by' &&
+              /^https?:\/\/creativecommons\.org\/licenses\/by\/4\.0\/?$/.test(license.url)
+            ? { ...ccBy }
+            : {
+                id: license.slug,
+                name: license.label,
+                url: license.url,
+                attributionRequired: license.slug.startsWith('by'),
+              },
       statistics: { polygonCount: raw.faceCount, vertexCount: raw.vertexCount },
       downloadOptions,
     };
@@ -132,6 +183,7 @@ export class SketchfabProvider implements ModelProvider {
         cursors: z.object({ next: z.string().nullable() }).optional(),
       }),
       await this.http.json(this.id, 'https://api.sketchfab.com/v3/search?' + params),
+      'Sketchfab search response',
     );
     const items = [];
     for (const model of result.results) {
@@ -146,13 +198,11 @@ export class SketchfabProvider implements ModelProvider {
       response(
         modelSchema,
         await this.http.json(this.id, 'https://api.sketchfab.com/v3/models/' + remote),
+        'Sketchfab model response',
       ),
     );
   }
-  async getDownloads(_id: string): Promise<ProviderDownload[]> {
-    fail(
-      'DOWNLOAD_OPTION_NOT_FOUND',
-      'Sketchfab downloads require user authentication. Open the model on Sketchfab to download it.',
-    );
+  async getDownloads(id: string): Promise<ProviderDownload[]> {
+    return this.downloads.downloads(id);
   }
 }

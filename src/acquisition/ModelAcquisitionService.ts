@@ -20,6 +20,7 @@ import type {
 } from './types.js';
 import type { ProviderId, FederatedSearchQuery } from '../providers/types.js';
 export interface AcquisitionServiceOptions extends ProviderHttpOptions {
+  sketchfabCredential?: import('../providers/SketchfabCredential.js').SketchfabCredentialSource;
   providers?: ProviderRegistry;
   downloadCache?: DownloadCacheOptions;
 }
@@ -51,7 +52,7 @@ export class ModelAcquisitionService {
     });
     this.http = http;
     this.cache = new DownloadCache(db, options.downloadCache);
-    this.providers = options.providers ?? new ProviderRegistry(http);
+    this.providers = options.providers ?? new ProviderRegistry(http, options.sketchfabCredential);
     this.plans = new AcquisitionPlanRepository(db);
     this.jobs = new AcquisitionJobRepository(db);
     this.jobs.recover();
@@ -61,7 +62,12 @@ export class ModelAcquisitionService {
       this.jobs,
       this.providers,
       this.planner,
-      new DownloadManager(http),
+      new DownloadManager(http, (provider, file, signal) => {
+        const adapter = this.providers.get(provider);
+        return adapter.resolveDownload
+          ? adapter.resolveDownload(file, signal)
+          : Promise.resolve(file.url);
+      }),
       this.cache,
       commit,
       getModel,

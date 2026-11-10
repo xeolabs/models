@@ -1,4 +1,7 @@
 import fs from 'node:fs';
+import { SketchfabArchive } from './SketchfabArchive.js';
+import { inspect } from '../storage/AssetStore.js';
+import { fail } from '../domain/ModelsError.js';
 import path from 'node:path';
 import { relativeFile } from '../storage/paths.js';
 import type { AcquisitionPlanItem } from './types.js';
@@ -17,17 +20,28 @@ export class AcquisitionImport {
     tags: string[],
     signal?: AbortSignal,
   ) {
-    const packageRoot = path.join(root, 'package');
-    fs.mkdirSync(packageRoot);
-    const files = item.files.map((file, i) => {
-      signal?.throwIfAborted();
-      const name = file.packagePath ?? file.filename,
-        destination = relativeFile(packageRoot, name);
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.copyFileSync(downloads[i].path, destination, fs.constants.COPYFILE_EXCL);
-      return { path: name, sha256: downloads[i].sha256 };
-    });
-    const entry = item.files.find((f) => f.role === 'entrypoint')!;
+    const archive =
+      item.provider === 'sketchfab' && item.files.length === 1 && item.files[0].role === 'archive'
+        ? await new SketchfabArchive().prepare(downloads[0].path, root, signal)
+        : undefined;
+    const packageRoot = archive?.root ?? path.join(root, 'package');
+    if (!archive) fs.mkdirSync(packageRoot);
+    const files = archive
+      ? archive.files.map((file) => ({
+          ...file,
+          sha256: inspect(relativeFile(packageRoot, file.path)).id,
+        }))
+      : item.files.map((file, i) => {
+          signal?.throwIfAborted();
+          const name = file.packagePath ?? file.filename,
+            destination = relativeFile(packageRoot, name);
+          fs.mkdirSync(path.dirname(destination), { recursive: true });
+          fs.copyFileSync(downloads[i].path, destination, fs.constants.COPYFILE_EXCL);
+          return { path: name, sha256: downloads[i].sha256 };
+        });
+    const entry = item.files.find((f) => f.role === 'entrypoint');
+    const entrypoint = archive?.entrypoint ?? entry?.packagePath ?? entry?.filename;
+    if (!entrypoint) fail('UNSUPPORTED_MODEL_MAPPING', 'Acquired model has no entrypoint');
     const manifest: Manifest = {
       schemaVersion: 1,
       metadata: {
@@ -43,7 +57,7 @@ export class AcquisitionImport {
           attribution: `${item.modelName}; ${item.model.author ? 'by ' + item.model.author : 'provided by ' + item.provider}; ${item.expectedLicense.name}; ${item.expectedLicense.url ?? ''}; ${item.sourceUrl}. Original source notices are retained in the package.`,
         },
       },
-      entrypoint: entry.packagePath ?? entry.filename,
+      entrypoint,
       files,
     };
     const manifestPath = path.join(packageRoot, 'manifest.json');

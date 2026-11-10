@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import ProviderAccountsDialog from './components/ProviderAccountsDialog.vue';
+import { useProviderAccounts } from './stores/providerAccounts';
+const accounts = useProviderAccounts();
 import ProcessingDialog from './components/ProcessingDialog.vue';
 import { useProcessing } from './stores/processing';
 import { Loading } from '@element-plus/icons-vue';
@@ -136,6 +139,7 @@ onUnmounted(() => {
             Find models
           </button>
         </nav>
+        <el-button @click="accounts.open = true">Provider accounts</el-button>
         <el-button class="processing-button" @click="processing.open = true">
           <el-icon v-if="processing.active" class="is-loading"><Loading /></el-icon>
           Processing<span v-if="processing.active || processing.queued">
@@ -203,6 +207,7 @@ onUnmounted(() => {
     </div>
     <ImportDialog v-model="importing" @imported="showLibrary" />
     <PreviewDialog />
+    <ProviderAccountsDialog />
     <ProcessingDialog />
   </ElConfigProvider>
 </template>

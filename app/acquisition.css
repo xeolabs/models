@@ -38,6 +38,11 @@
   gap: 8px;
   padding: 12px;
 }
+.remote-search-panel > .provider-authentication-button {
+  align-self: flex-start;
+  flex-shrink: 0;
+  margin: 0 12px 12px;
+}
 .section-note {
   color: var(--el-text-color-secondary);
   line-height: 1.55;
@@ -365,10 +370,21 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  margin-top: 12px;
   font-size: 12px;
 }
 .result-filter-actions > span {
+  flex: 1 1 140px;
+  min-width: 0;
   margin-right: auto;
+  line-height: 1.5;
+}
+.result-filter-actions > .el-button {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: 28px;
+  margin: 0;
+  padding: 6px 12px;
 }
 .model-statistics {
   margin-top: 10px;

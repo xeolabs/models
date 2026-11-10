@@ -36,14 +36,14 @@ test('Sketchfab exposes public discovery, archive sizes and real license labels 
   expect(result.items).toHaveLength(2);
   expect(result.nextCursor).toBe('2');
   expect(result.items[0].statistics?.polygonCount).toBe(999786);
-  expect(result.items[1].license.id).toBe('by');
+  expect(result.items[1].license.id).toBe('CC-BY-4.0');
   expect(
     result.items[1].downloadOptions?.some(
       (option) => option.format === 'glb' && option.sizeBytes === 89866620,
     ),
   ).toBe(true);
   await expect(provider.getDownloads(result.items[0].remoteId)).rejects.toMatchObject({
-    code: 'DOWNLOAD_OPTION_NOT_FOUND',
+    code: 'PROVIDER_AUTH_REQUIRED',
   });
 });
 test('Smithsonian groups model files and preserves distinct directly downloadable GLB variants', async () => {

@@ -21,7 +21,14 @@ export interface DownloadOptions {
  * Streams to a unique partial file. Only a fully verified file becomes a completed download.
  */
 export class DownloadManager {
-  constructor(private readonly http: ProviderHttpClient) {}
+  constructor(
+    private readonly http: ProviderHttpClient,
+    private readonly resolve: (
+      provider: ProviderId,
+      file: ProviderDownloadFile,
+      signal?: AbortSignal,
+    ) => Promise<string> = async (_provider, file) => file.url,
+  ) {}
   async download(
     provider: ProviderId,
     file: ProviderDownloadFile,
@@ -32,7 +39,7 @@ export class DownloadManager {
     fs.mkdirSync(directory, { recursive: true });
     return this.http.transfer(
       provider,
-      file.url,
+      await this.resolve(provider, file, options.signal),
       async (response) => {
         if (response.status !== 200)
           fail('DOWNLOAD_FAILED', 'Download: expected a complete response');

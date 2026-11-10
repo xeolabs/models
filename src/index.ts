@@ -9,6 +9,10 @@ export type { AcquisitionServiceOptions } from './acquisition/ModelAcquisitionSe
 export { ProviderRegistry } from './providers/ProviderRegistry.js';
 export { PolyHavenProvider } from './providers/PolyHavenProvider.js';
 
+export type {
+  SketchfabCredential,
+  SketchfabCredentialSource,
+} from './providers/SketchfabCredential.js';
 export { SketchfabProvider } from './providers/SketchfabProvider.js';
 export { SmithsonianProvider } from './providers/SmithsonianProvider.js';
 

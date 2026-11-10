@@ -127,7 +127,20 @@ export class ProviderHttpClient {
             if ([301, 302, 303, 307, 308].includes(response.status)) {
               if (redirects >= 3 || !response.headers.location)
                 fail('INVALID_PROVIDER_RESPONSE', 'Provider request: invalid redirect chain');
-              url = providerUrl(provider, new URL(response.headers.location, url).href, purpose);
+              const target = providerUrl(
+                provider,
+                new URL(response.headers.location, url).href,
+                purpose,
+              );
+              if (
+                Object.keys(headers).some((name) => name.toLowerCase() === 'authorization') &&
+                target.origin !== url.origin
+              )
+                fail(
+                  'INVALID_PROVIDER_RESPONSE',
+                  'Provider request: authenticated redirect changed origin',
+                );
+              url = target;
               continue;
             }
             if (
@@ -181,6 +194,57 @@ export class ProviderHttpClient {
       } finally {
         release?.();
       }
+    }
+  }
+
+  /**
+   * Account details and signed download links must never enter the metadata cache.
+   * The caller supplies credentials for this request only.
+   */
+  async authenticatedJson(
+    provider: ProviderId,
+    url: string,
+    authorization: string,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    if (!authorization || /[\r\n]/.test(authorization))
+      fail('INVALID_PROVIDER_CREDENTIALS', 'Invalid provider credentials');
+    try {
+      return await this.transfer(
+        provider,
+        url,
+        async (response) => {
+          if (response.status !== 200)
+            fail('INVALID_PROVIDER_RESPONSE', 'Provider authentication: expected JSON');
+          const chunks: Buffer[] = [];
+          let size = 0;
+          for await (const chunk of response.body) {
+            size += chunk.length;
+            if (size > 1024 * 1024)
+              fail('INVALID_PROVIDER_RESPONSE', 'Provider authentication: response too large');
+            chunks.push(Buffer.from(chunk));
+          }
+          try {
+            return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          } catch {
+            fail('INVALID_PROVIDER_RESPONSE', 'Provider authentication: invalid JSON');
+          }
+        },
+        signal,
+        { Authorization: authorization },
+      );
+    } catch (error) {
+      if (error instanceof StatusError && error.status === 401)
+        fail(
+          'PROVIDER_AUTH_REQUIRED',
+          'Sketchfab rejected the credentials. Reconnect your account.',
+        );
+      if (error instanceof StatusError && error.status === 403)
+        fail(
+          'PROVIDER_AUTH_FORBIDDEN',
+          'Sketchfab did not allow this account to access the requested resource.',
+        );
+      throw error;
     }
   }
   async json(provider: ProviderId, url: string): Promise<unknown> {
