@@ -1,0 +1,136 @@
+{
+  "rows": [
+    {
+      "title": "Side Chair",
+      "content": {
+        "usage": "Web3D",
+        "quality": "Thumb",
+        "uri": "https://3d-api.si.edu/content/document/3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc/chair-(england),-1750-60-20k-512-thumb.glb",
+        "file_type": "glb",
+        "model_type": "glb",
+        "draco_compressed": true,
+        "model_url": "3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc",
+        "gltf_orientation_compliant": true
+      }
+    },
+    {
+      "title": "Side Chair",
+      "content": {
+        "usage": "Web3D",
+        "quality": "Low",
+        "uri": "https://3d-api.si.edu/content/document/3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc/chair-(england),-1750-60-150k-1024-low.glb",
+        "file_type": "glb",
+        "model_type": "glb",
+        "draco_compressed": true,
+        "model_url": "3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc",
+        "gltf_orientation_compliant": true
+      }
+    },
+    {
+      "title": "Side Chair",
+      "content": {
+        "usage": "Web3D",
+        "quality": "Medium",
+        "uri": "https://3d-api.si.edu/content/document/3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc/chair-(england),-1750-60-150k-2048-medium.glb",
+        "file_type": "glb",
+        "model_type": "glb",
+        "draco_compressed": true,
+        "model_url": "3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc",
+        "gltf_orientation_compliant": true
+      }
+    },
+    {
+      "title": "Side Chair",
+      "content": {
+        "usage": "Web3D",
+        "quality": "High",
+        "uri": "https://3d-api.si.edu/content/document/3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc/chair-(england),-1750-60-150k-4096-high.glb",
+        "file_type": "glb",
+        "model_type": "glb",
+        "draco_compressed": true,
+        "model_url": "3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc",
+        "gltf_orientation_compliant": true
+      }
+    },
+    {
+      "title": "Side Chair",
+      "content": {
+        "usage": "Web3D",
+        "quality": "AR",
+        "uri": "https://3d-api.si.edu/content/document/3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc/chair-(england)-1750-60-150k-2048-medium-100k-2048_draco.glb",
+        "file_type": "glb",
+        "model_type": "glb",
+        "draco_compressed": true,
+        "model_url": "3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc",
+        "gltf_orientation_compliant": true
+      }
+    },
+    {
+      "title": "Side Chair",
+      "content": {
+        "usage": "App3D",
+        "quality": "AR",
+        "uri": "https://3d-api.si.edu/content/document/3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc/chair-(england)-1750-60-150k-2048-medium-100k-2048_std_draco.glb",
+        "file_type": "glb",
+        "model_type": "glb",
+        "draco_compressed": true,
+        "model_url": "3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc",
+        "gltf_orientation_compliant": true
+      }
+    },
+    {
+      "title": "Side Chair",
+      "content": {
+        "uri": "https://3d-api.si.edu/content/document/3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc/resources/chair-(england)-1750-60-150k-4096.glb",
+        "quality": "Low_resolution",
+        "usage": "Download3D",
+        "model_type": "glb",
+        "file_type": "glb",
+        "file_size": 8395172,
+        "model_url": "3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc",
+        "gltf_orientation_compliant": true
+      }
+    },
+    {
+      "title": "Side Chair",
+      "content": {
+        "uri": "https://3d-api.si.edu/content/document/3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc/resources/chair-(england)-1750-60-150k-2048-medium-100k-2048_std_draco.glb",
+        "quality": "Low_resolution",
+        "usage": "Download3D",
+        "model_type": "glb",
+        "file_type": "glb",
+        "file_size": 1461828,
+        "model_url": "3d_package:ff607e3c-3d88-4422-a246-3976aa4839dc",
+        "gltf_orientation_compliant": true
+      }
+    },
+    {
+      "title": "Side Chair",
+      "content": {
+        "usage": "Web3D",
+        "quality": "Thumb",
+        "uri": "https://3d-api.si.edu/content/document/3d_package:57d30b85-3549-40dc-99c3-255249867462/p0-Part-100k-512.glb",
+        "file_type": "glb",
+        "model_type": "glb",
+        "draco_compressed": true,
+        "model_url": "3d_package:57d30b85-3549-40dc-99c3-255249867462",
+        "gltf_orientation_compliant": true
+      }
+    },
+    {
+      "title": "Side Chair",
+      "content": {
+        "usage": "Web3D",
+        "quality": "Low",
+        "uri": "https://3d-api.si.edu/content/document/3d_package:57d30b85-3549-40dc-99c3-255249867462/p0-Part-100k-1024.glb",
+        "file_type": "glb",
+        "model_type": "glb",
+        "draco_compressed": true,
+        "model_url": "3d_package:57d30b85-3549-40dc-99c3-255249867462",
+        "gltf_orientation_compliant": true
+      }
+    }
+  ],
+  "rowCount": 24,
+  "message": "content found"
+}

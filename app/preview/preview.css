@@ -1,0 +1,149 @@
+.preview-parking {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: 64px;
+  height: 64px;
+  visibility: hidden;
+  pointer-events: none;
+}
+.preview-toolbar,
+.preview-effects,
+.preview-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.preview-toolbar {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.preview-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.preview-modes button {
+  padding: 7px 12px;
+  font: inherit;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  background: var(--app-surface);
+  color: var(--el-text-color-primary);
+  cursor: pointer;
+}
+.preview-modes button[aria-pressed='true'] {
+  background: var(--app-selected);
+  border-color: var(--el-color-primary);
+  color: var(--el-color-primary);
+}
+.preview-modes button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.preview-effects {
+  gap: 8px 22px;
+  margin-bottom: 12px;
+}
+.preview-effects label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.preview-stage {
+  position: relative;
+  height: min(66vh, 760px);
+  min-height: 260px;
+  background: #06080a;
+  overflow: hidden;
+  border-radius: 4px;
+}
+.preview-viewport,
+.preview-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.preview-canvas {
+  touch-action: none;
+  outline-offset: -3px;
+}
+.preview-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 28px;
+  background: #080d16db;
+  color: #e4edf7;
+  text-align: center;
+}
+.preview-overlay > .el-icon {
+  font-size: 28px;
+}
+.preview-overlay progress {
+  width: min(300px, 80%);
+  height: 7px;
+  accent-color: var(--el-color-primary);
+}
+.preview-overlay p {
+  max-width: 560px;
+  line-height: 1.6;
+}
+.preview-stream-progress {
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--app-surface);
+  padding: 10px 14px;
+  border-radius: 4px;
+}
+.preview-footer {
+  justify-content: space-between;
+  margin-top: 12px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  min-height: 20px;
+}
+.preview-render-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.model-select {
+  width: 100%;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.model-card-actions {
+  padding: 0 12px 12px;
+}
+.model-card-actions .el-button {
+  width: 100%;
+}
+@media (max-width: 600px) {
+  .preview-stage {
+    height: 53vh;
+    min-height: 200px;
+  }
+  .preview-effects {
+    gap: 4px 12px;
+  }
+  .preview-modes button {
+    padding: 7px 8px;
+  }
+}

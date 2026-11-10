@@ -1,0 +1,50 @@
+{
+  "commit": {
+    "sha": "31eb1dd0a0406fb9ebf0ebd823b48e1ec95afc08"
+  },
+  "tree": {
+    "truncated": false,
+    "tree": [
+      {
+        "path": "IFC 2.3.0.1 (IFC 2x3)/Duplex Apartment/Duplex_A_20110907.ifc",
+        "mode": "100644",
+        "type": "blob",
+        "sha": "6d9013bf0e0c58a3841a17d694233d60e9afc46e",
+        "size": 132,
+        "url": "https://api.github.com/repos/buildingsmart-community/Community-Sample-Test-Files/git/blobs/6d9013bf0e0c58a3841a17d694233d60e9afc46e"
+      },
+      {
+        "path": "IFC 2.3.0.1 (IFC 2x3)/Duplex Apartment/Duplex_Electrical_20121207.ifc",
+        "mode": "100644",
+        "type": "blob",
+        "sha": "1a2def15d1977bf451fedaeb92a1af86d0733479",
+        "size": 132,
+        "url": "https://api.github.com/repos/buildingsmart-community/Community-Sample-Test-Files/git/blobs/1a2def15d1977bf451fedaeb92a1af86d0733479"
+      },
+      {
+        "path": "IFC 2.3.0.1 (IFC 2x3)/Duplex Apartment/README.md",
+        "mode": "100644",
+        "type": "blob",
+        "sha": "dd33ade6686c4578b8a806f8eb37679546709474",
+        "size": 1619,
+        "url": "https://api.github.com/repos/buildingsmart-community/Community-Sample-Test-Files/git/blobs/dd33ade6686c4578b8a806f8eb37679546709474"
+      },
+      {
+        "path": "IFC 2.3.0.1 (IFC 2x3)/readme.md",
+        "mode": "100644",
+        "type": "blob",
+        "sha": "b4c3dbb61870af39ec0c33be5d1ac1dbd3ddcea0",
+        "size": 115,
+        "url": "https://api.github.com/repos/buildingsmart-community/Community-Sample-Test-Files/git/blobs/b4c3dbb61870af39ec0c33be5d1ac1dbd3ddcea0"
+      },
+      {
+        "path": "README.md",
+        "mode": "100644",
+        "type": "blob",
+        "sha": "f7465617c3df9d609c6eb32ddab03c3c625f5429",
+        "size": 794,
+        "url": "https://api.github.com/repos/buildingsmart-community/Community-Sample-Test-Files/git/blobs/f7465617c3df9d609c6eb32ddab03c3c625f5429"
+      }
+    ]
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "commit": {
+    "sha": "80d976a9b193a26a8e928c3e79bff67af1de68a8"
+  },
+  "tree": {
+    "truncated": false,
+    "tree": [
+      {
+        "path": "IFC 2.3.0.1 (IFC 2x3 TC1)/README.md",
+        "mode": "100644",
+        "type": "blob",
+        "sha": "739b34a1bb744a28bf1124c7afec798d9721a904",
+        "size": 245,
+        "url": "https://api.github.com/repos/buildingSMART/Certification-datasets/git/blobs/739b34a1bb744a28bf1124c7afec798d9721a904"
+      },
+      {
+        "path": "IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Building-Architecture.ifc",
+        "mode": "100644",
+        "type": "blob",
+        "sha": "07f1b8014e74b950037f53a0547ded51b435953f",
+        "size": 92542,
+        "url": "https://api.github.com/repos/buildingSMART/Certification-datasets/git/blobs/07f1b8014e74b950037f53a0547ded51b435953f"
+      },
+      {
+        "path": "IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Building-Hvac.ifc",
+        "mode": "100644",
+        "type": "blob",
+        "sha": "4ff261b087e62cf38cbc438c75280387986bc83f",
+        "size": 69893,
+        "url": "https://api.github.com/repos/buildingSMART/Certification-datasets/git/blobs/4ff261b087e62cf38cbc438c75280387986bc83f"
+      },
+      {
+        "path": "LICENSE",
+        "mode": "100644",
+        "type": "blob",
+        "sha": "0ac4732f2f3bedaa4c4b2da4b2017c6eff3ba563",
+        "size": 317,
+        "url": "https://api.github.com/repos/buildingSMART/Certification-datasets/git/blobs/0ac4732f2f3bedaa4c4b2da4b2017c6eff3ba563"
+      },
+      {
+        "path": "README.md",
+        "mode": "100644",
+        "type": "blob",
+        "sha": "dc53be1be50aba2388d80a43c9ac5ddd91d41d6a",
+        "size": 406,
+        "url": "https://api.github.com/repos/buildingSMART/Certification-datasets/git/blobs/dc53be1be50aba2388d80a43c9ac5ddd91d41d6a"
+      }
+    ]
+  }
+}

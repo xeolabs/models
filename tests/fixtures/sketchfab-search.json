@@ -1,0 +1,413 @@
+{
+  "cursors": { "next": "2", "previous": null },
+  "next": "https:\/\/api.sketchfab.com\/v3\/search?archives_flavours=true&count=2&cursor=2&downloadable=true&q=chair&type=models",
+  "previous": null,
+  "results": [
+    {
+      "uri": "https:\/\/api.sketchfab.com\/v3\/models\/9aea3b516d3e4e169710049b32282670",
+      "uid": "9aea3b516d3e4e169710049b32282670",
+      "name": "The Wizard's Chair",
+      "staffpickedAt": "2020-11-06T16:21:44.412403",
+      "viewCount": 11856,
+      "likeCount": 472,
+      "animationCount": 0,
+      "viewerUrl": "https:\/\/sketchfab.com\/3d-models\/none-9aea3b516d3e4e169710049b32282670",
+      "embedUrl": "https:\/\/sketchfab.com\/models\/9aea3b516d3e4e169710049b32282670\/embed",
+      "commentCount": 15,
+      "isDownloadable": true,
+      "publishedAt": "2020-11-03T13:58:21.718675",
+      "tags": [
+        { "name": "dae", "slug": "dae", "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/dae" },
+        {
+          "name": "sculpt",
+          "slug": "sculpt",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/sculpt"
+        },
+        {
+          "name": "wizard",
+          "slug": "wizard",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/wizard"
+        },
+        { "name": "sofa", "slug": "sofa", "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/sofa" },
+        {
+          "name": "furniture",
+          "slug": "furniture",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/furniture"
+        },
+        {
+          "name": "polypaint",
+          "slug": "polypaint",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/polypaint"
+        },
+        {
+          "name": "daehowest",
+          "slug": "daehowest",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/daehowest"
+        },
+        {
+          "name": "digitalsculpting",
+          "slug": "digitalsculpting",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/digitalsculpting"
+        },
+        {
+          "name": "comforter",
+          "slug": "comforter",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/comforter"
+        },
+        {
+          "name": "gameart",
+          "slug": "gameart",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/gameart"
+        },
+        { "name": "chair", "slug": "chair", "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/chair" },
+        {
+          "name": "stylized",
+          "slug": "stylized",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/stylized"
+        },
+        {
+          "name": "daehowest_ds2019",
+          "slug": "daehowest_ds2019",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/daehowest_ds2019"
+        },
+        {
+          "name": "daehowest_ds2019_a1",
+          "slug": "daehowest_ds2019_a1",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/daehowest_ds2019_a1"
+        },
+        {
+          "name": "daehowest_ds2020",
+          "slug": "daehowest_ds2020",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/daehowest_ds2020"
+        },
+        {
+          "name": "daehowest_ds2020_a1",
+          "slug": "daehowest_ds2020_a1",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/daehowest_ds2020_a1"
+        }
+      ],
+      "categories": [{ "name": "art-abstract" }, { "name": "furniture-home" }],
+      "thumbnails": {
+        "images": [
+          {
+            "uid": "b6d34e8f51aa469bada5561dc504106c",
+            "size": 209274,
+            "width": 1920,
+            "url": "https:\/\/media.sketchfab.com\/models\/9aea3b516d3e4e169710049b32282670\/thumbnails\/0d1323875aea4916af4533b6c634b720\/8b5246ce29be4e688ab94e44e49d909a.jpeg",
+            "height": 1080
+          },
+          {
+            "uid": "56493e8207a047e59d756360a1405c14",
+            "size": 40146,
+            "width": 1024,
+            "url": "https:\/\/media.sketchfab.com\/models\/9aea3b516d3e4e169710049b32282670\/thumbnails\/0d1323875aea4916af4533b6c634b720\/33496399439944519081eedd1632b0fd.jpeg",
+            "height": 576
+          },
+          {
+            "uid": "59cfb49c735144dda6a7c4cdadcb9af1",
+            "size": 22864,
+            "width": 720,
+            "url": "https:\/\/media.sketchfab.com\/models\/9aea3b516d3e4e169710049b32282670\/thumbnails\/0d1323875aea4916af4533b6c634b720\/ffda47ed66fa4291ac98d4050dc5ac6d.jpeg",
+            "height": 405
+          },
+          {
+            "uid": "6a998d01761c43b4bc3cc51e5a30ba90",
+            "size": 4813,
+            "width": 256,
+            "url": "https:\/\/media.sketchfab.com\/models\/9aea3b516d3e4e169710049b32282670\/thumbnails\/0d1323875aea4916af4533b6c634b720\/b487d6582b824280ae9e9e4945b9f7f4.jpeg",
+            "height": 144
+          },
+          {
+            "uid": "4848bfaaa2c845f18a83b0954267d250",
+            "size": 893,
+            "width": 64,
+            "url": "https:\/\/media.sketchfab.com\/models\/9aea3b516d3e4e169710049b32282670\/thumbnails\/0d1323875aea4916af4533b6c634b720\/9661b50ffa3e43c99dcf22afd08904e4.jpeg",
+            "height": 36
+          }
+        ]
+      },
+      "user": {
+        "uid": "5a7cfd6e11d3497199e8bc4e66a0d7cb",
+        "username": "SilkevdSmissen",
+        "displayName": "SilkevdSmissen",
+        "profileUrl": "https:\/\/sketchfab.com\/SilkevdSmissen",
+        "account": "basic",
+        "avatar": {
+          "uri": "https:\/\/api.sketchfab.com\/v3\/avatars\/9e2bd709d4d54580b47d8cb976646319",
+          "images": [
+            {
+              "size": 739,
+              "width": 32,
+              "url": "https:\/\/media.sketchfab.com\/avatars\/9e2bd709d4d54580b47d8cb976646319\/6d2071304f114ce5bb3c3840bb162ff1.jpeg",
+              "height": 32
+            },
+            {
+              "size": 1142,
+              "width": 48,
+              "url": "https:\/\/media.sketchfab.com\/avatars\/9e2bd709d4d54580b47d8cb976646319\/070168d5ed124c848e747424c89f598b.jpeg",
+              "height": 48
+            },
+            {
+              "size": 2825,
+              "width": 90,
+              "url": "https:\/\/media.sketchfab.com\/avatars\/9e2bd709d4d54580b47d8cb976646319\/715d1bf83129470ca1900eebe9d70b5a.jpeg",
+              "height": 90
+            },
+            {
+              "size": 3353,
+              "width": 100,
+              "url": "https:\/\/media.sketchfab.com\/avatars\/9e2bd709d4d54580b47d8cb976646319\/1ed43144f884487ebcbfd78f068194f8.jpeg",
+              "height": 100
+            }
+          ]
+        },
+        "uri": "https:\/\/api.sketchfab.com\/v3\/users\/5a7cfd6e11d3497199e8bc4e66a0d7cb"
+      },
+      "description": "This prop was made as an assignment for my Digital Sculpting course at DAE Howest. It will be part of a small diorama. I chose to create a wizard's living room setting. \nIt was sculpted and then polypainted in ZBrush.\n\nI created the concept by mix and matching a few other concept, but mainly based myself off of Merlin's chair in the sword in the stone, and this concept by Cory Loftis.\nhttps:\/\/carbonmade-media.accelerator.net\/21299402;366x441.jpeg\n\nYou can also check it out on my artstation, where I show some renders made in ZBrush: https:\/\/www.artstation.com\/artwork\/mDE2ke",
+      "faceCount": 999786,
+      "createdAt": "2020-11-02T20:36:40.602687",
+      "vertexCount": 499991,
+      "isAgeRestricted": false,
+      "archives": {
+        "glb": [
+          {
+            "textureCount": 0,
+            "size": 34741352,
+            "type": "glb",
+            "textureMaxResolution": 0,
+            "faceCount": 999786,
+            "vertexCount": 567902
+          }
+        ],
+        "gltf": [
+          {
+            "textureCount": 0,
+            "size": 16567803,
+            "type": "gltf",
+            "textureMaxResolution": 0,
+            "faceCount": 999786,
+            "vertexCount": 567902
+          }
+        ],
+        "source": [
+          {
+            "textureCount": null,
+            "size": 28692055,
+            "type": "source",
+            "textureMaxResolution": null,
+            "faceCount": null,
+            "vertexCount": null
+          }
+        ],
+        "usdz": [
+          {
+            "textureCount": null,
+            "size": 17115625,
+            "type": "usdz",
+            "textureMaxResolution": null,
+            "faceCount": null,
+            "vertexCount": null
+          }
+        ]
+      },
+      "license": {
+        "uid": "34b725081a6a4184957efaec2cb84ed3",
+        "label": "CC Attribution-NonCommercial-NoDerivs"
+      }
+    },
+    {
+      "uri": "https:\/\/api.sketchfab.com\/v3\/models\/c741dcd8720f4a629de8681bdcd4529b",
+      "uid": "c741dcd8720f4a629de8681bdcd4529b",
+      "name": "Scifi Chair Concept",
+      "staffpickedAt": "2024-08-07T12:59:07.702032",
+      "viewCount": 11991,
+      "likeCount": 509,
+      "animationCount": 0,
+      "viewerUrl": "https:\/\/sketchfab.com\/3d-models\/none-c741dcd8720f4a629de8681bdcd4529b",
+      "embedUrl": "https:\/\/sketchfab.com\/models\/c741dcd8720f4a629de8681bdcd4529b\/embed",
+      "commentCount": 13,
+      "isDownloadable": true,
+      "publishedAt": "2024-07-31T22:21:59.968264",
+      "tags": [
+        { "name": "kit", "slug": "kit", "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/kit" },
+        { "name": "lab", "slug": "lab", "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/lab" },
+        { "name": "prop", "slug": "prop", "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/prop" },
+        {
+          "name": "cyberpunk",
+          "slug": "cyberpunk",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/cyberpunk"
+        },
+        { "name": "pilot", "slug": "pilot", "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/pilot" },
+        {
+          "name": "texture",
+          "slug": "texture",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/texture"
+        },
+        { "name": "scifi", "slug": "scifi", "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/scifi" },
+        { "name": "chair", "slug": "chair", "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/chair" },
+        {
+          "name": "design",
+          "slug": "design",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/design"
+        },
+        {
+          "name": "sci-fi",
+          "slug": "sci-fi",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/sci-fi"
+        },
+        {
+          "name": "hardsurface",
+          "slug": "hardsurface",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/hardsurface"
+        },
+        {
+          "name": "medical",
+          "slug": "medical",
+          "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/medical"
+        },
+        { "name": "space", "slug": "space", "uri": "https:\/\/api.sketchfab.com\/v3\/tags\/space" }
+      ],
+      "categories": [{ "name": "electronics-gadgets" }, { "name": "science-technology" }],
+      "thumbnails": {
+        "images": [
+          {
+            "uid": "8cfb7380ea9f4981a0f40893e0f44238",
+            "size": 125249,
+            "width": 1920,
+            "url": "https:\/\/media.sketchfab.com\/models\/c741dcd8720f4a629de8681bdcd4529b\/thumbnails\/efa67debbcde46e6abcd200a98e1b44d\/eb0ae7f144b3447f98d586555a15e5d1.jpeg",
+            "height": 1080
+          },
+          {
+            "uid": "38608ca2927944bd9c5bcf59db601fc0",
+            "size": 39137,
+            "width": 1024,
+            "url": "https:\/\/media.sketchfab.com\/models\/c741dcd8720f4a629de8681bdcd4529b\/thumbnails\/efa67debbcde46e6abcd200a98e1b44d\/a3b8817e014f49f4bfaf45e176963cde.jpeg",
+            "height": 576
+          },
+          {
+            "uid": "a058abac68f54a8785772840a4a09f79",
+            "size": 22061,
+            "width": 720,
+            "url": "https:\/\/media.sketchfab.com\/models\/c741dcd8720f4a629de8681bdcd4529b\/thumbnails\/efa67debbcde46e6abcd200a98e1b44d\/5909bf9af22442388cac1ce9ec7d3449.jpeg",
+            "height": 405
+          },
+          {
+            "uid": "c73dd4d51de647fa82c88bc7451966b3",
+            "size": 4459,
+            "width": 256,
+            "url": "https:\/\/media.sketchfab.com\/models\/c741dcd8720f4a629de8681bdcd4529b\/thumbnails\/efa67debbcde46e6abcd200a98e1b44d\/3904d601f9c54cfcab18f06efbf89d17.jpeg",
+            "height": 144
+          },
+          {
+            "uid": "7ae3eb0f67e54a59a3aa04fd9369c4f7",
+            "size": 1090,
+            "width": 64,
+            "url": "https:\/\/media.sketchfab.com\/models\/c741dcd8720f4a629de8681bdcd4529b\/thumbnails\/efa67debbcde46e6abcd200a98e1b44d\/d48b7bb925404e1aa16aeb3211d4f67d.jpeg",
+            "height": 36
+          }
+        ]
+      },
+      "user": {
+        "uid": "a1103fac2029470b821d4de6e8efe65a",
+        "username": "Seesha",
+        "displayName": "Seesha",
+        "profileUrl": "https:\/\/sketchfab.com\/Seesha",
+        "account": "basic",
+        "avatar": {
+          "uri": "https:\/\/api.sketchfab.com\/v3\/avatars\/14abdc546376479181df34f47bf9ec5b",
+          "images": [
+            {
+              "size": 941,
+              "width": 32,
+              "url": "https:\/\/media.sketchfab.com\/avatars\/14abdc546376479181df34f47bf9ec5b\/4dfd296a340a42f1884b097b33246777.jpeg",
+              "height": 32
+            },
+            {
+              "size": 1226,
+              "width": 48,
+              "url": "https:\/\/media.sketchfab.com\/avatars\/14abdc546376479181df34f47bf9ec5b\/f46298f97da04a90b25139d8de6afef8.jpeg",
+              "height": 48
+            },
+            {
+              "size": 2367,
+              "width": 90,
+              "url": "https:\/\/media.sketchfab.com\/avatars\/14abdc546376479181df34f47bf9ec5b\/fab99a1c46bc4c969e060474f9ef9fc7.jpeg",
+              "height": 90
+            },
+            {
+              "size": 2697,
+              "width": 100,
+              "url": "https:\/\/media.sketchfab.com\/avatars\/14abdc546376479181df34f47bf9ec5b\/0adefdf787484933899af77793c92f60.jpeg",
+              "height": 100
+            }
+          ]
+        },
+        "uri": "https:\/\/api.sketchfab.com\/v3\/users\/a1103fac2029470b821d4de6e8efe65a"
+      },
+      "description": "Hey whatsup\nSimple scifi (little bir retrofuture) chair concept\njust exoplorations and searching for less annoying pipeline\npipeline: blender (modeling) >>>>3dcoat (paint) >>>> blender (checking + some additional fixes) \nprop has 8k textures\ndraft uv unwraps\n\n\ndownload, star, follow",
+      "faceCount": 256383,
+      "createdAt": "2024-07-31T21:42:09.664203",
+      "vertexCount": 132175,
+      "isAgeRestricted": false,
+      "archives": {
+        "glb": [
+          {
+            "textureCount": 4,
+            "size": 89866620,
+            "type": "glb",
+            "textureMaxResolution": 8192,
+            "faceCount": 256343,
+            "vertexCount": 183570
+          },
+          {
+            "textureCount": 4,
+            "size": 41940336,
+            "type": "glb",
+            "textureMaxResolution": 4096,
+            "faceCount": 256343,
+            "vertexCount": 183570
+          },
+          {
+            "textureCount": 4,
+            "size": 18676420,
+            "type": "glb",
+            "textureMaxResolution": 1024,
+            "faceCount": 256343,
+            "vertexCount": 183570
+          }
+        ],
+        "gltf": [
+          {
+            "textureCount": 4,
+            "size": 83006013,
+            "type": "gltf",
+            "textureMaxResolution": 8192,
+            "faceCount": 256343,
+            "vertexCount": 183570
+          }
+        ],
+        "source": [
+          {
+            "textureCount": null,
+            "size": 38369210,
+            "type": "source",
+            "textureMaxResolution": null,
+            "faceCount": null,
+            "vertexCount": null
+          }
+        ],
+        "usdz": [
+          {
+            "textureCount": null,
+            "size": 11461510,
+            "type": "usdz",
+            "textureMaxResolution": null,
+            "faceCount": null,
+            "vertexCount": null
+          }
+        ]
+      },
+      "license": { "uid": "322a749bcfa841b29dff1e8a1bb74b0b", "label": "CC Attribution" }
+    }
+  ]
+}

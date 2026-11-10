@@ -1,0 +1,66 @@
+.picker-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--app-surface);
+  border-bottom: 1px solid var(--el-border-color);
+}
+.picker-context div,
+.picker-selection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.picker-context span,
+.picker-selection span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.picker-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--el-border-color);
+  background: var(--app-surface);
+}
+.picker-selection {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.picker-selection .picker-error {
+  color: var(--el-color-danger);
+}
+.picker-shell .metadata-form {
+  display: none;
+}
+@media (max-width: 600px) {
+  .picker-footer {
+    flex-wrap: wrap;
+  }
+  .picker-selection {
+    flex-basis: 100%;
+  }
+  .picker-context {
+    align-items: flex-start;
+  }
+}
+
+.acquired-model-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+.acquired-model-choice input {
+  margin: 0;
+  accent-color: var(--el-color-primary);
+}
+.job-item.job-item-selected {
+  border-color: var(--el-color-primary);
+  background: var(--app-selected);
+}
