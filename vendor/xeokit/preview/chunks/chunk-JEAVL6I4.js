@@ -16,7 +16,7 @@ import {
   resizeTexturePixels,
   streamLiveLength,
   streamUploads
-} from "./chunk-3HYABQVT.js";
+} from "./chunk-YHRG2W5D.js";
 
 // ../sdk-oct2/src/viewing/techniques/rayTracing/webGPU/mipmaps.ts
 var normalized = new Float64Array(256);

@@ -1,3 +1,5 @@
+import { ServerModelAssets } from './ServerModelAssets.js';
+import { z } from 'zod';
 import { ServerPropertiesClient } from './ServerPropertiesClient.js';
 import type {
   PropertySetMode,
@@ -20,7 +22,20 @@ import type { ModelRecord, ModelQuery } from '../domain/types.js';
  */
 export class ServerModelsClient {
   readonly properties: ServerPropertiesClient;
-  private constructor(readonly baseUrl: string) {
+
+  /**
+   * Pinned native scene-asset access for this verified library. Server addresses and credentials are not embedded in resource identities.
+   */
+  readonly sceneAssets: ServerModelAssets;
+  private constructor(
+
+    /**
+     * Verified server address used by this client, separate from the persistent library namespace.
+     */
+    readonly baseUrl: string,
+    libraryId: string,
+  ) {
+    this.sceneAssets = new ServerModelAssets(this, libraryId);
     this.properties = new ServerPropertiesClient(baseUrl);
   }
   dataModelUrl(
@@ -77,16 +92,25 @@ export class ServerModelsClient {
       throw new Error(
         'Models server URL must use HTTP or HTTPS without credentials, a query or a fragment.',
       );
-    const client = new ServerModelsClient(baseUrl.replace(/\/$/, ''));
-    await client.getJson('/api/summary', signal);
-    return client;
+    const client = new ServerModelsClient(baseUrl.replace(/\/$/, ''), 'unverified');
+    const summary = z
+      .object({ id: z.string().uuid() })
+      .parse(await client.getJson('/api/summary', signal));
+    return new ServerModelsClient(client.baseUrl, summary.id);
   }
   async thumbnailStatus(modelId: string, signal?: AbortSignal) {
     const result = await this.getJson<{ ready: boolean; url?: string }>(
       '/api/models/' + encodeURIComponent(modelId) + '/thumbnail/status',
       signal,
     );
-    return { ...result, ...(result.url ? { url: this.baseUrl + result.url } : {}) };
+    return {
+      ...result,
+      ...(result.url
+        ? {
+            url: this.baseUrl + result.url,
+          }
+        : {}),
+    };
   }
   async processing(modelId?: string, signal?: AbortSignal) {
     return this.getJson<import('../processing/types.js').ProcessingOverview>(

@@ -211,3 +211,13 @@ IFC preview APIs: `library.thumbnailStatus(id)` reports a ready flag and optiona
 ## External IFC properties
 
 See [external properties](external-properties.md) for `propertiesInfo`, `configureProperties`, `getPropertySets`, `getObjectProperties`, `queryPropertyObjects`, and `resolveDataModelFile`. The browser package also exports `ServerPropertiesClient` and `ExternalPropertyLoader`. All property data remains native xeokit SDK v3 data.
+
+## Shared scene geometry
+
+`ServerModelsClient.sceneAssets.references(modelId, options)` discovers geometry
+in one model's cached XGF stream. `sceneAssets.resolve(references, options)`
+returns verified shard bytes and geometry IDs for the SDK's pure
+`readXGFGeometryAssets` decoder. Both support cancellation and bounded reads;
+no renderer or second geometry database is required. See
+[scene geometry](scene-assets.md) for the complete resolver example and revision
+availability rules.

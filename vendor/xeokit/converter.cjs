@@ -77451,313 +77451,340 @@ var Data = class {
   }
 };
 
-// ../sdk-oct2/src/model/scene/SceneLight.ts
-var SceneLight = class _SceneLight {
-  id;
-  uniqueId;
-  scene;
-  model;
-  destroyed = false;
-  /**
-   * @internal Referencing domains protect this resource from premature disposal.
-   */
-  _domains = /* @__PURE__ */ new Set();
-  /**
-   * @internal Deferred stream cleanup after the final domain releases this light.
-   */
-  _onUnused;
-  _params;
-  _parent = null;
-  /**
-   * @internal Construct with Scene.createLight or SceneModel.createLight.
-   */
-  constructor(scene, model, params) {
-    this.id = params.id;
-    this.scene = scene;
-    this.model = model;
-    this.uniqueId = JSON.stringify([model?.id ?? null, this.id]);
-    this._params = this._copy(params);
-    this._attach();
+// ../sdk-oct2/src/model/scene/animation/SceneAnimation.ts
+function cloneNumberArray(values2) {
+  return Array.from(values2);
+}
+function validateSampler(target, sampler) {
+  if (!sampler) {
+    return "Missing sampler.";
   }
-  /**
-   * @internal Validates complete input before changing any state.
-   */
-  static validate(model, p) {
-    if (!p || typeof p.id !== "string" || !p.id || !["directional", "point", "spot"].includes(p.type)) return "A light requires an ID and directional, point or spot type";
-    for (const key of ["color", "position", "direction"]) {
-      const v = p[key];
-      if (v !== void 0 && (!v || v.length !== 3 || !Array.from(v).every(Number.isFinite))) return `Invalid light ${key}`;
+  const times = sampler.times;
+  const values2 = sampler.values;
+  if (!times || times.length === 0) {
+    return "Sampler times must contain at least one time.";
+  }
+  if (!values2 || values2.length === 0) {
+    return "Sampler values must contain at least one value.";
+  }
+  for (let i = 0; i < times.length; i++) {
+    if (!Number.isFinite(times[i])) {
+      return `Sampler time at index ${i} is not finite.`;
     }
-    if (p.color?.some((v) => v < 0) || p.direction && Math.hypot(...p.direction) === 0) return "Light color must be nonnegative and direction nonzero";
-    if (p.intensity !== void 0 && (!Number.isFinite(p.intensity) || p.intensity < 0)) return "Light intensity must be finite and nonnegative";
-    if (p.range !== void 0 && (!Number.isFinite(p.range) || p.range <= 0)) return "Light range must be finite and positive";
-    const inner = p.innerConeAngle ?? 0, outer = p.outerConeAngle ?? Math.PI / 4;
-    if (!Number.isFinite(inner) || !Number.isFinite(outer) || inner < 0 || inner >= outer || outer > Math.PI / 2) return "Spot angles require 0 <= inner < outer <= PI/2";
-    if (p.active !== void 0 && typeof p.active !== "boolean") return "Light active must be boolean";
-    if (p.parentTransformId !== void 0 && (!model || !Object.prototype.hasOwnProperty.call(model.transforms, p.parentTransformId) || model.transforms[p.parentTransformId].destroyed)) return "Light parent transform not found";
+    if (i > 0 && times[i] <= times[i - 1]) {
+      return "Sampler times must be strictly increasing.";
+    }
+  }
+  const interpolation = sampler.interpolation ?? "LINEAR";
+  if (interpolation !== "STEP" && interpolation !== "LINEAR") {
+    return `Unsupported interpolation '${interpolation}'.`;
+  }
+  let valueSize;
+  if (target.type === "material") {
+    valueSize = 3;
+  } else if (target.type === "transform") {
+    valueSize = target.property === "rotation" ? 4 : 3;
+  } else if (target.type === "vertexState") {
+    valueSize = 1;
+  } else {
+    if (!Number.isInteger(sampler.valueSize) || sampler.valueSize <= 0) {
+      return "Morph-weight sampler requires a positive integer valueSize.";
+    }
+    valueSize = sampler.valueSize;
+  }
+  if (values2.length !== times.length * valueSize) {
+    return `Sampler values length must be times.length * ${valueSize}.`;
+  }
+  for (let i = 0; i < values2.length; i++) {
+    if (!Number.isFinite(values2[i])) {
+      return `Sampler value at index ${i} is not finite.`;
+    }
+    if (target.type === "material") {
+      if (target.property === "color" && (values2[i] < 0 || values2[i] > 1))
+        return "Material color animation factors must be in [0,1].";
+      if (target.property === "emissiveColor" && (values2[i] < 0 || !Number.isFinite(Math.fround(values2[i]))))
+        return "Material emission animation factors must be non-negative finite float32 values.";
+    }
+    if (target.type === "vertexState" && (!Number.isInteger(values2[i]) || values2[i] < 0)) {
+      return `Vertex-state sampler value at index ${i} must be a non-negative integer state index.`;
+    }
+  }
+  if (target.type === "transform" && target.property === "rotation") {
+    for (let i = 0; i < values2.length; i += 4) {
+      if (Math.max(Math.abs(values2[i]), Math.abs(values2[i + 1]), Math.abs(values2[i + 2]), Math.abs(values2[i + 3])) === 0) {
+        return `Rotation sample at index ${i / 4} must be a non-zero quaternion.`;
+      }
+    }
+  }
+  return null;
+}
+function validateTarget(target) {
+  if (!target) {
+    return "Missing channel target.";
+  }
+  if (target.type === "material") {
+    if (!target.materialId) return "Material animation requires target.materialId.";
+    if (target.property !== "color" && target.property !== "emissiveColor")
+      return "Unsupported material animation property.";
     return null;
   }
-  get type() {
-    return this._params.type;
-  }
-  get color() {
-    return [...this._params.color];
-  }
-  set color(value) {
-    this.fromParams({ ...this._params, color: value });
-  }
-  get intensity() {
-    return this._params.intensity;
-  }
-  set intensity(value) {
-    this.fromParams({ ...this._params, intensity: value });
-  }
-  get active() {
-    return this._params.active;
-  }
-  set active(value) {
-    this.fromParams({ ...this._params, active: value });
-  }
-  get position() {
-    return [...this._params.position];
-  }
-  set position(value) {
-    this.fromParams({ ...this._params, position: value });
-  }
-  get direction() {
-    return [...this._params.direction];
-  }
-  set direction(value) {
-    this.fromParams({ ...this._params, direction: value });
-  }
-  get range() {
-    return this._params.range;
-  }
-  set range(value) {
-    this.fromParams({ ...this._params, range: value });
-  }
-  get innerConeAngle() {
-    return this._params.innerConeAngle;
-  }
-  get outerConeAngle() {
-    return this._params.outerConeAngle;
-  }
-  get parentTransform() {
-    return this._parent;
-  }
-  /**
-   * Atomically replaces the light definition. ID and ownership are immutable.
-   */
-  fromParams(params) {
-    const error = this.destroyed || this.scene.destroyed || this.scene._clearing ? "Light or scene is destroyed" : params?.id !== this.id ? "Light ID cannot change" : _SceneLight.validate(this.model, params);
-    if (error) return this._error(error);
-    const next2 = this._copy(params);
-    if (JSON.stringify(next2) === JSON.stringify(this._params)) return { ok: true, value: void 0 };
-    this._parent?._lights?.delete(this);
-    this._params = next2;
-    this._attach();
-    this.scene._lightingChanged();
-    return { ok: true, value: void 0 };
-  }
-  toParams() {
-    return this.destroyed ? this._error("Light is destroyed") : { ok: true, value: this._copy(this._params) };
-  }
-  /**
-   * @internal Resolves world position and direction in double precision.
-   */
-  _world() {
-    const m = this._parent?.worldMatrix ?? this.model?.coordinateSystemMatrix;
-    const p = this._params.position, d = this._params.direction;
-    const position = Array.from(p), direction = Array.from(d);
-    if (m) for (let i = 0; i < 3; i++) {
-      position[i] = m[i] * p[0] + m[i + 4] * p[1] + m[i + 8] * p[2] + m[i + 12];
-      direction[i] = m[i] * d[0] + m[i + 4] * d[1] + m[i + 8] * d[2];
+  if (target.type === "vertexState") {
+    if (!target.meshId) {
+      return "Vertex-state animation target requires target.meshId.";
     }
-    const length2 = Math.hypot(...direction);
-    return { position, direction: direction.map((v) => length2 > 0 ? v / length2 : 0) };
+    return null;
+  }
+  if (target.type === "morphWeights") {
+    if (!target.meshId) {
+      return "Morph-weight animation target requires target.meshId.";
+    }
+    return null;
+  }
+  if (target.type !== "transform") {
+    return `Unsupported animation target type '${target.type}'.`;
+  }
+  if (!target.transformId) {
+    return "Transform animation target requires target.transformId.";
+  }
+  if (target.property !== "translation" && target.property !== "rotation" && target.property !== "scale") {
+    return `Unsupported transform animation property '${target.property}'.`;
+  }
+  return null;
+}
+function cloneChannel(channel) {
+  const times = Object.freeze(cloneNumberArray(channel.sampler.times));
+  const values2 = Object.freeze(cloneNumberArray(channel.sampler.values));
+  return Object.freeze({
+    target: Object.freeze({ ...channel.target }),
+    sampler: Object.freeze({
+      times,
+      values: values2,
+      ...channel.sampler.valueSize !== void 0 ? { valueSize: channel.sampler.valueSize } : {},
+      interpolation: channel.sampler.interpolation ?? "LINEAR"
+    })
+  });
+}
+var SceneAnimation = class {
+  id;
+  name;
+  model;
+  scene;
+  uniqueId;
+  channels;
+  destroyed = false;
+  constructor(scene, params, model = null) {
+    this.model = model;
+    this.scene = scene;
+    this.uniqueId = scene.assets.identity(params.id, model);
+    this.id = params.id;
+    this.name = params.name;
+    this.channels = Object.freeze(params.channels.map(cloneChannel));
+  }
+  get startTime() {
+    let startTime = Infinity;
+    for (const channel of this.channels) {
+      startTime = Math.min(startTime, channel.sampler.times[0]);
+    }
+    return startTime === Infinity ? 0 : startTime;
   }
   /**
-   * Fails while a domain references the light. Detach it before removing its model.
+   * Last authored sample time across all channels.
    */
-  destroy() {
-    if (this.destroyed || this._domains.size) return this._error("Light is destroyed or still referenced by a lighting domain");
-    this._parent?._lights?.delete(this);
-    this._parent = null;
-    if (this.model) delete this.model.lights[this.id];
-    delete this.scene.lights[this.uniqueId];
-    this.destroyed = true;
-    this._onUnused = void 0;
-    this.scene._lightingChanged();
-    return { ok: true, value: void 0 };
+  get endTime() {
+    let endTime = -Infinity;
+    for (const channel of this.channels) {
+      const times = channel.sampler.times;
+      endTime = Math.max(endTime, times[times.length - 1]);
+    }
+    return endTime === -Infinity ? 0 : endTime;
   }
-  _attach() {
-    this._parent = this._params.parentTransformId ? this.model.transforms[this._params.parentTransformId] : null;
-    if (this._parent) (this._parent._lights ??= /* @__PURE__ */ new Set()).add(this);
+  /**
+   * Difference between the first and last authored sample times.
+   */
+  get duration() {
+    return Math.max(0, this.endTime - this.startTime);
   }
-  _copy(p) {
+  /**
+   * Serializes this immutable animation asset back to JSON-friendly params.
+   */
+  toParams() {
+    if (this.destroyed) {
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: `[SceneAnimation.toParams] Cannot serialize destroyed SceneAnimation ${this.id}`
+      });
+    }
     return {
-      ...p,
-      color: Array.from(p.color ?? [1, 1, 1]),
-      intensity: p.intensity ?? 1,
-      position: Array.from(p.position ?? [0, 0, 0]),
-      direction: Array.from(p.direction ?? [0, 0, -1]),
-      innerConeAngle: p.innerConeAngle ?? 0,
-      outerConeAngle: p.outerConeAngle ?? Math.PI / 4,
-      active: p.active !== false
+      ok: true,
+      value: {
+        id: this.id,
+        ...this.name !== void 0 ? { name: this.name } : {},
+        channels: this.channels.map(cloneChannel)
+      }
     };
   }
-  _error(error) {
-    return this.scene.logError({ ok: false, type: 2 /* InvalidInput */, error: `[SceneLight] ${error}` });
-  }
-};
-
-// ../sdk-oct2/src/model/scene/LightingDomain.ts
-var LightingDomain = class _LightingDomain {
-  id;
-  scene;
-  destroyed = false;
   /**
-   * @internal Compact renderer selector; never serialized into model assets.
-   */
-  _slot;
-  /**
-   * @internal Explicit mesh bindings and model defaults protect shared lifetime.
-   */
-  _meshes = /* @__PURE__ */ new Set();
-  /**
-   * @internal Models inheriting this domain, including models with no meshes yet.
-   */
-  _models = /* @__PURE__ */ new Set();
-  _lights = [];
-  _ambient;
-  _environment;
-  _environmentIntensity;
-  /**
-   * @internal Construct through Scene.createLightingDomain.
-   */
-  constructor(scene, params, slot) {
-    this.scene = scene;
-    this.id = params.id;
-    this._slot = slot;
-    this._ambient = Array.from(params.ambient ?? [0, 0, 0]);
-    this._environment = params.environment ?? "none";
-    this._environmentIntensity = params.environmentIntensity ?? 1;
-    this._lights = [...new Set(params.lights ?? [])];
-    for (const light of this._lights) light._domains.add(this);
-  }
-  /**
-   * @internal Rejects foreign, destroyed and uncommitted light resources.
-   */
-  static validate(scene, p) {
-    if (!p || typeof p.id !== "string" || !p.id) return "A lighting domain requires a nonempty ID";
-    if (p.ambient !== void 0 && (!p.ambient || p.ambient.length !== 3 || !Array.from(p.ambient).every((v) => Number.isFinite(v) && v >= 0))) return "Ambient radiance must be finite and nonnegative";
-    if (p.environment !== void 0 && p.environment !== "none" && p.environment !== "view") return "Environment must be none or view";
-    if (p.environmentIntensity !== void 0 && (!Number.isFinite(p.environmentIntensity) || p.environmentIntensity < 0)) return "Environment intensity must be finite and nonnegative";
-    if (p.lights !== void 0 && !Array.isArray(p.lights)) return "Lights must be an array";
-    for (const light of p.lights ?? []) if (!(light instanceof SceneLight) || light.destroyed || light.scene !== scene || scene.lights[light.uniqueId] !== light || light.model && !light.model._canShareLight(light)) return "Light is foreign, destroyed or unpublished";
-    return null;
-  }
-  get lights() {
-    return this._lights.slice();
-  }
-  get ambient() {
-    return Array.from(this._ambient);
-  }
-  set ambient(value) {
-    this.fromParams({ ...this._params(), ambient: value });
-  }
-  get environment() {
-    return this._environment;
-  }
-  set environment(value) {
-    this.fromParams({ ...this._params(), environment: value });
-  }
-  get environmentIntensity() {
-    return this._environmentIntensity;
-  }
-  set environmentIntensity(value) {
-    this.fromParams({ ...this._params(), environmentIntensity: value });
-  }
-  setLights(lights) {
-    return this.fromParams({ ...this._params(), lights });
-  }
-  /**
-   * Atomically updates shared lighting; membership and GPU geometry stay intact.
-   */
-  fromParams(p) {
-    const error = this.destroyed || this.scene.destroyed || this.scene._clearing ? "Domain or scene is destroyed" : p?.id !== this.id ? "Domain ID cannot change" : _LightingDomain.validate(this.scene, p);
-    if (error) return this._error(error);
-    const previous = this._lights;
-    for (const light of previous) light._domains.delete(this);
-    this._lights = [...new Set(p.lights ?? [])];
-    for (const light of this._lights) light._domains.add(this);
-    this._ambient = Array.from(p.ambient ?? [0, 0, 0]);
-    this._environment = p.environment ?? "none";
-    this._environmentIntensity = p.environmentIntensity ?? 1;
-    for (const light of previous) if (!light._domains.size) light._onUnused?.();
-    this.scene._lightingChanged();
-    return { ok: true, value: void 0 };
-  }
-  /**
-   * Fails while any mesh or model references the domain. Removing a member
-   * model alone never destroys a shared domain or its light resources.
+   * Removes this animation from its owning SceneModel.
    */
   destroy() {
-    if (this.destroyed || this._meshes.size || this._models.size) return this._error("Domain is destroyed or still referenced");
-    const previous = this._lights;
-    for (const light of previous) light._domains.delete(this);
-    this._lights = [];
-    delete this.scene.lightingDomains[this.id];
+    if (this.destroyed) {
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: `[SceneAnimation.destroy] SceneAnimation ${this.id} already destroyed`
+      });
+    }
+    (this.model ?? this.scene)._destroyAnimation(this);
     this.destroyed = true;
-    for (const light of previous) if (!light._domains.size) light._onUnused?.();
-    this.scene._lightingChanged();
     return { ok: true, value: void 0 };
   }
-  _params() {
-    return { id: this.id, lights: this._lights, ambient: this._ambient, environment: this._environment, environmentIntensity: this._environmentIntensity };
-  }
-  _error(error) {
-    return this.scene.logError({ ok: false, type: 2 /* InvalidInput */, error: `[LightingDomain] ${error}` });
+  /**
+   * Validates animation params without creating a SceneAnimation.
+   */
+  static validateParams(params) {
+    if (!params) {
+      return "Missing SceneAnimationParams.";
+    }
+    if (!params.id) {
+      return "SceneAnimationParams.id is required.";
+    }
+    if (!params.channels || !Array.isArray(params.channels)) {
+      return "SceneAnimationParams.channels must be an array.";
+    }
+    for (let i = 0; i < params.channels.length; i++) {
+      const channel = params.channels[i];
+      const targetError = validateTarget(channel?.target);
+      if (targetError) {
+        return `Channel ${i}: ${targetError}`;
+      }
+      const samplerError = validateSampler(channel.target, channel.sampler);
+      if (samplerError) {
+        return `Channel ${i}: ${samplerError}`;
+      }
+    }
+    return null;
   }
 };
 
-// ../sdk-oct2/src/model/scene/representation/RepresentationSchemaCatalog.ts
-var RepresentationSchemaCatalog = class {
-  schemas = /* @__PURE__ */ new Map();
+// ../sdk-oct2/src/model/scene/variant/SceneVariant.ts
+var SceneVariant = class {
   /**
-   * Adds a CPU validator without creating renderer/device state.
-   *
-   * @param schema Validator for exactly one semantic type and supported versions.
-   * @returns Success, or InvalidInput for duplicate type or invalid version declarations.
+   * Variant ID, unique within its variant set.
    */
-  register(schema) {
-    if (!schema.type || !schema.versions.length || schema.versions.some((version2) => !Number.isSafeInteger(version2) || version2 < 1) || this.schemas.has(schema.type)) {
-      return {
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `Duplicate or invalid representation schema: ${schema.type}`
-      };
-    }
-    this.schemas.set(schema.type, schema);
-    return { ok: true, value: void 0 };
+  id;
+  /**
+   * The variant set that contains this variant.
+   */
+  variantSet;
+  /**
+   * SceneObject IDs included in this variant.
+   */
+  objectIds;
+  /**
+   * Optional projected-size selection hint.
+   */
+  range;
+  /**
+   * @private
+   */
+  constructor(variantSet, params) {
+    this.variantSet = variantSet;
+    this.id = params.id;
+    this.objectIds = params.objectIds.slice();
+    this.range = params.range ? { ...params.range } : void 0;
   }
   /**
-   * Checks a definition without requiring executable rendering support.
-   *
-   * @param input Structurally valid definition and resolved semantic resource inputs.
-   * @returns Known schema validity, or an explicit unknown/unsupported result.
-   * Validator exceptions become an invalid result with code validator-failed.
+   * Gets this variant as parameters.
    */
-  validate(input) {
-    const schema = this.schemas.get(input.representation.type);
-    if (!schema) return { status: "unknown-type" };
-    if (!schema.versions.includes(input.representation.schemaVersion)) return { status: "unsupported-schema" };
-    try {
-      const issues = schema.validate(input);
-      return issues.length ? { status: "invalid", issues } : { status: "valid" };
-    } catch (error) {
-      return { status: "invalid", issues: [{ code: "validator-failed", path: "", message: String(error) }] };
+  toParams() {
+    return {
+      id: this.id,
+      objectIds: this.objectIds.slice(),
+      range: this.range ? { ...this.range } : void 0
+    };
+  }
+};
+
+// ../sdk-oct2/src/model/scene/variant/SceneVariantSet.ts
+var SceneVariantSet = class {
+  /**
+   * Variant set ID, unique within its SceneModel.
+   */
+  id;
+  /**
+   * SceneModel that owns this variant set.
+   */
+  model;
+  scene;
+  uniqueId;
+  /**
+   * Variants in this variant set, keyed by variant ID.
+   */
+  variants = {};
+  /**
+   * ID of the default variant.
+   */
+  defaultVariantId;
+  /**
+   * Optional declarative selection metadata.
+   */
+  selection;
+  /**
+   * True after this variant set has been destroyed.
+   */
+  destroyed = false;
+  /**
+   * @private
+   */
+  constructor(scene, params, model = null) {
+    this.model = model;
+    this.scene = scene;
+    this.uniqueId = scene.assets.identity(params.id, model);
+    this.id = params.id;
+    this.defaultVariantId = params.defaultVariantId;
+    this.selection = params.selection ? { ...params.selection } : void 0;
+    for (let i = 0, len = params.variants.length; i < len; i++) {
+      const variant = new SceneVariant(this, params.variants[i]);
+      this.variants[variant.id] = variant;
     }
+  }
+  /**
+   * Gets the default variant.
+   */
+  get defaultVariant() {
+    return this.variants[this.defaultVariantId];
+  }
+  /**
+   * Gets this variant set as parameters.
+   */
+  toParams() {
+    return {
+      id: this.id,
+      defaultVariantId: this.defaultVariantId,
+      selection: this.selection ? { ...this.selection } : void 0,
+      variants: Object.keys(this.variants).map((id) => this.variants[id].toParams())
+    };
+  }
+  /**
+   * Destroys this variant set.
+   *
+   * Referenced SceneObjects are not destroyed.
+   */
+  destroy() {
+    if (this.destroyed) {
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "[SceneVariantSet.destroy] SceneVariantSet already destroyed"
+      });
+    }
+    (this.model ?? this.scene)._destroyVariantSet(this);
+    this.destroyed = true;
+    return {
+      ok: true,
+      value: void 0
+    };
   }
 };
 
@@ -78030,213 +78057,8 @@ function normalizeQuat(q, dest = q) {
   return dest;
 }
 
-// ../sdk-oct2/src/base/math/internal/decodeOctNormalsU16Into.ts
-function decodeOctNormalsU16Into(octs, result, offset = 0, stride = 3, count = octs.length / 2) {
-  if (octs.length % 2 !== 0) {
-    throw new Error("Invalid input: octs must contain an even number of elements.");
-  }
-  for (let i = 0, j = offset, len = Math.min(octs.length, count * 2); i < len; i += 2, j += stride) {
-    let x = octs[i] / 65535 * 2 - 1;
-    let y = octs[i + 1] / 65535 * 2 - 1;
-    const z = 1 - Math.abs(x) - Math.abs(y);
-    if (z < 0) {
-      const tempx = (1 - Math.abs(y)) * Math.sign(x);
-      const tempy = (1 - Math.abs(x)) * Math.sign(y);
-      x = tempx;
-      y = tempy;
-    }
-    const length2 = Math.sqrt(x * x + y * y + z * z) || 1;
-    result[j] = x / length2;
-    result[j + 1] = y / length2;
-    result[j + 2] = z / length2;
-    if (stride === 4) result[j + 3] = 1;
-  }
-  return result;
-}
-
-// ../sdk-oct2/src/base/math/compression.ts
-var translate = createMat4Float64();
-var scale = createMat4Float64();
-function decompressPoint3WithMat4(position, decompressMatrix, dest = position) {
-  dest[0] = position[0] * decompressMatrix[0] + decompressMatrix[12];
-  dest[1] = position[1] * decompressMatrix[5] + decompressMatrix[13];
-  dest[2] = position[2] * decompressMatrix[10] + decompressMatrix[14];
-  return dest;
-}
-function decompressPoint3WithAABB3(position, aabb, dest = position) {
-  const xScale = (aabb[3] - aabb[0]) / 65535;
-  const xOffset = aabb[0];
-  const yScale = (aabb[4] - aabb[1]) / 65535;
-  const yOffset = aabb[1];
-  const zScale = (aabb[5] - aabb[2]) / 65535;
-  const zOffset = aabb[2];
-  dest[0] = position[0] * xScale + xOffset;
-  dest[1] = position[1] * yScale + yOffset;
-  dest[2] = position[2] * zScale + zOffset;
-  return dest;
-}
-function decompressPositions3WithAABB3(positions, aabb, dest = new Float32Array(positions.length)) {
-  const xScale = (aabb[3] - aabb[0]) / 65535;
-  const xOffset = aabb[0];
-  const yScale = (aabb[4] - aabb[1]) / 65535;
-  const yOffset = aabb[1];
-  const zScale = (aabb[5] - aabb[2]) / 65535;
-  const zOffset = aabb[2];
-  for (let i = 0; i < positions.length; i += 3) {
-    dest[i] = positions[i] * xScale + xOffset;
-    dest[i + 1] = positions[i + 1] * yScale + yOffset;
-    dest[i + 2] = positions[i + 2] * zScale + zOffset;
-  }
-  return dest;
-}
-function decompressUVs(uvs, decompressMatrix, dest = new Float32Array(uvs.length)) {
-  if (uvs.length % 2 !== 0 || decompressMatrix.length < 8) {
-    throw new Error("Invalid input: UVs must be a multiple of 2, and decompressMatrix must have at least 8 elements.");
-  }
-  for (let i = 0, len = uvs.length; i < len; i += 2) {
-    dest[i] = uvs[i] * decompressMatrix[0] + decompressMatrix[6];
-    dest[i + 1] = uvs[i + 1] * decompressMatrix[4] + decompressMatrix[7];
-  }
-  return dest;
-}
-function quantizePositions3(positions, aabb, out) {
-  const lenPositions = positions.length;
-  const positionsCompressed = out ?? new Uint16Array(lenPositions);
-  if (positionsCompressed.length !== lenPositions) throw new Error("quantizePositions3: destination length must match positions");
-  const [xmin, ymin, zmin, xmax, ymax, zmax] = aabb;
-  const xwid = xmax - xmin;
-  const ywid = ymax - ymin;
-  const zwid = zmax - zmin;
-  const widths = [xwid, ywid, zwid];
-  if (![...aabb, ...widths].every(Number.isFinite) || widths.some((width) => width < 0)) {
-    throw new Error("quantizePositions3: bounds must be finite and ordered");
-  }
-  for (let i = 0; i < lenPositions; i++) {
-    if (!Number.isFinite(positions[i])) throw new Error("quantizePositions3: positions must be finite");
-    const axis = i % 3;
-    const normalized = widths[axis] === 0 ? 0 : (positions[i] - aabb[axis]) / widths[axis];
-    positionsCompressed[i] = Math.max(0, Math.min(65535, Math.round(normalized * 65535)));
-  }
-  return positionsCompressed;
-}
-function compressRGBColors(colors) {
-  const len = colors.length;
-  const compressed = new Uint16Array(len);
-  for (let i = 0; i < len; i++) {
-    if (colors[i] < 0 || colors[i] > 1) {
-      throw new Error(`Color value at index ${i} (${colors[i]}) is out of range [0, 1].`);
-    }
-    compressed[i] = Math.round(colors[i] * 255);
-  }
-  return compressed;
-}
-function packUVsToFloat32(uvs) {
-  if (uvs instanceof Float32Array) {
-    return uvs;
-  }
-  const out = new Float32Array(uvs.length);
-  for (let i = 0, len = uvs.length; i < len; i++) {
-    out[i] = uvs[i];
-  }
-  return out;
-}
-function octEncodeNormalsToU16(normals, out) {
-  const numNormals = normals.length / 3 | 0;
-  out ??= new Uint16Array(numNormals * 2);
-  if (out.length !== numNormals * 2) throw new Error("octEncodeNormalsToU16: destination length must match normal count");
-  for (let i = 0; i < numNormals; i++) {
-    let nx = normals[i * 3];
-    let ny = normals[i * 3 + 1];
-    let nz = normals[i * 3 + 2];
-    const invLen = 1 / (Math.sqrt(nx * nx + ny * ny + nz * nz) || 1);
-    nx *= invLen;
-    ny *= invLen;
-    nz *= invLen;
-    const denom = Math.abs(nx) + Math.abs(ny) + Math.abs(nz) || 1;
-    let ex = nx / denom;
-    let ey = ny / denom;
-    if (nz < 0) {
-      const tx = (1 - Math.abs(ey)) * (ex >= 0 ? 1 : -1);
-      const ty = (1 - Math.abs(ex)) * (ey >= 0 ? 1 : -1);
-      ex = tx;
-      ey = ty;
-    }
-    out[i * 2] = Math.round((ex * 0.5 + 0.5) * 65535);
-    out[i * 2 + 1] = Math.round((ey * 0.5 + 0.5) * 65535);
-  }
-  return out;
-}
-function octDecodeNormalsU16(octs, result = new Float32Array(octs.length / 2 * 3)) {
-  return decodeOctNormalsU16Into(octs, result);
-}
-
-// ../sdk-oct2/src/base/math/boundaries.ts
-var tempVec3a = createVec3Float64();
-var tempVec3b = createVec3Float64();
-var tempVec3c = createVec3Float64();
-var tempMat4a2 = createMat4Float64();
-function createAABB3Float64(values2) {
-  return new Float64Array(values2 || 6);
-}
-function collapseAABB3(aabb) {
-  aabb.set([MAX_DOUBLE, MAX_DOUBLE, MAX_DOUBLE, MIN_DOUBLE, MIN_DOUBLE, MIN_DOUBLE]);
-  return aabb;
-}
-function expandAABB3Points3(aabb, positions) {
-  for (let i = 0; i < positions.length; i += 3) {
-    for (let j = 0; j < 3; j++) {
-      aabb[j] = Math.min(aabb[j], positions[i + j]);
-      aabb[j + 3] = Math.max(aabb[j + 3], positions[i + j]);
-    }
-  }
-  return aabb;
-}
-var positions3ToAABB3 = (() => {
-  const p = createVec3Float64();
-  return (positions, aabb = createAABB3Float64(), positionsDecompressMatrix) => {
-    let xmin = MAX_DOUBLE, ymin = MAX_DOUBLE, zmin = MAX_DOUBLE;
-    let xmax = MIN_DOUBLE, ymax = MIN_DOUBLE, zmax = MIN_DOUBLE;
-    for (let i = 0, len = positions.length; i < len; i += 3) {
-      let x = positions[i], y = positions[i + 1], z = positions[i + 2];
-      if (positionsDecompressMatrix) {
-        p[0] = x;
-        p[1] = y;
-        p[2] = z;
-        decompressPoint3WithMat4(p, positionsDecompressMatrix, p);
-        x = p[0];
-        y = p[1];
-        z = p[2];
-      }
-      xmin = Math.min(xmin, x);
-      ymin = Math.min(ymin, y);
-      zmin = Math.min(zmin, z);
-      xmax = Math.max(xmax, x);
-      ymax = Math.max(ymax, y);
-      zmax = Math.max(zmax, z);
-    }
-    aabb[0] = xmin;
-    aabb[1] = ymin;
-    aabb[2] = zmin;
-    aabb[3] = xmax;
-    aabb[4] = ymax;
-    aabb[5] = zmax;
-    return aabb;
-  };
-})();
-
-// ../sdk-oct2/src/base/math/index.ts
-var MIN_DOUBLE = -Number.MAX_SAFE_INTEGER;
-var MAX_DOUBLE = Number.MAX_SAFE_INTEGER;
-var DEGTORAD = 0.0174532925;
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-function clamp01(value) {
-  return value < 0 ? 0 : value > 1 ? 1 : value;
-}
-
 // ../sdk-oct2/src/base/math/matrix.ts
-var tempMat4a3 = createMat4Float64();
+var tempMat4a2 = createMat4Float64();
 var tempMat4b = createVec3Float64();
 var tempVec4a = createVec4Float64();
 var tempVec4b = createVec4Float64();
@@ -78578,1405 +78400,209 @@ var vec3FromMat4Scale = (() => {
   };
 })();
 
-// ../sdk-oct2/src/model/scene/SceneClipBox.ts
-var IDENTITY_MATRIX = new Float64Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-var SceneClipBox = class _SceneClipBox {
-  id;
-  /**
-   * Collision-free key in Scene.clipBoxes. Owner-local IDs may be reused.
-   */
-  uniqueId;
-  scene;
-  /**
-   * Owning model, or null for an application-managed, scene-owned box.
-   */
-  model;
-  destroyed = false;
-  /**
-   * @internal Prevents acquiring new references during owner destruction.
-   */
-  _retiring = false;
-  /**
-   * @internal Mesh references keep this resource alive during streaming.
-   */
-  _meshes = /* @__PURE__ */ new Set();
-  /**
-   * @internal Deferred stream cleanup after the final mesh releases this box.
-   */
-  _onUnused;
-  _aabb;
-  _active;
-  _parent;
-  _matrix;
-  /**
-   * @internal Construct through Scene.createClipBox or SceneModel.createClipBox.
-   */
-  constructor(scene, model, params) {
-    this.id = params.id;
-    this.uniqueId = _SceneClipBox.key(model, params.id);
-    this.scene = scene;
-    this.model = model;
-    this._aabb = Array.from(params.aabb);
-    this._active = params.active !== false;
-    this._matrix = createMat4Float64(params.matrix ?? IDENTITY_MATRIX);
-    this._parent = model && params.parentTransformId ? model.transforms[params.parentTransformId] : null;
-    if (this._parent) (this._parent._clipBoxes ??= /* @__PURE__ */ new Set()).add(this);
+// ../sdk-oct2/src/base/math/internal/decodeOctNormalsU16Into.ts
+function decodeOctNormalsU16Into(octs, result, offset = 0, stride = 3, count = octs.length / 2) {
+  if (octs.length % 2 !== 0) {
+    throw new Error("Invalid input: octs must contain an even number of elements.");
   }
-  /**
-   * @internal Validate before publishing any state.
-   */
-  static validate(model, params) {
-    if (!params || typeof params.id !== "string" || !params.id) return "A clip box requires a nonempty ID";
-    const b2 = params.aabb;
-    if (!b2 || b2.length !== 6 || !Array.from(b2).every(Number.isFinite) || b2[0] >= b2[3] || b2[1] >= b2[4] || b2[2] >= b2[5]) return "Clip box bounds must have finite, positive extents";
-    if (params.active !== void 0 && typeof params.active !== "boolean") return "Clip box active must be boolean";
-    if (model && params.matrix !== void 0) return "Model-owned clip boxes use parentTransformId, not matrix";
-    if (!model && params.parentTransformId !== void 0) return "Scene-owned clip boxes use matrix, not parentTransformId";
-    if (params.matrix !== void 0) {
-      const m = params.matrix;
-      if (!m || m.length !== 16 || !Array.from(m).every(Number.isFinite) || m[3] !== 0 || m[7] !== 0 || m[11] !== 0 || m[15] !== 1) return "Clip box matrix must be finite and affine";
+  for (let i = 0, j = offset, len = Math.min(octs.length, count * 2); i < len; i += 2, j += stride) {
+    let x = octs[i] / 65535 * 2 - 1;
+    let y = octs[i + 1] / 65535 * 2 - 1;
+    const z = 1 - Math.abs(x) - Math.abs(y);
+    if (z < 0) {
+      const tempx = (1 - Math.abs(y)) * Math.sign(x);
+      const tempy = (1 - Math.abs(x)) * Math.sign(y);
+      x = tempx;
+      y = tempy;
     }
-    if (params.parentTransformId !== void 0 && (!Object.prototype.hasOwnProperty.call(model.transforms, params.parentTransformId) || model.transforms[params.parentTransformId].destroyed)) {
-      return `Clip box parent transform not found: ${params.parentTransformId}`;
-    }
-    return null;
+    const length2 = Math.sqrt(x * x + y * y + z * z) || 1;
+    result[j] = x / length2;
+    result[j + 1] = y / length2;
+    result[j + 2] = z / length2;
+    if (stride === 4) result[j + 3] = 1;
   }
-  /**
-   * @internal Namespaced registry key; JSON tuples preserve arbitrary owner IDs.
-   */
-  static key(model, id) {
-    return JSON.stringify([model?.id ?? null, id]);
-  }
-  get aabb() {
-    return Array.from(this._aabb);
-  }
-  set aabb(value) {
-    this.fromParams({ ...this._params(), aabb: value });
-  }
-  get active() {
-    return this._active;
-  }
-  set active(value) {
-    this.fromParams({ ...this._params(), active: value });
-  }
-  get parentTransform() {
-    return this._parent;
-  }
-  /**
-   * Snapshot of the box-local-to-scene frame. Assigning updates a scene-owned
-   * box; model-owned frames must be changed through their transform hierarchy.
-   */
-  get matrix() {
-    return createMat4Float64(this.worldMatrix);
-  }
-  set matrix(value) {
-    this.fromParams({ ...this._params(), matrix: value });
-  }
-  /**
-   * Box-local to scene-world transform. Treat the returned matrix as read-only.
-   */
-  get worldMatrix() {
-    return this._parent?.worldMatrix ?? this.model?.coordinateSystemMatrix ?? this._matrix;
-  }
-  /**
-   * Reattaches the box without changing its local bounds.
-   */
-  setParentTransform(id) {
-    if (!this.model) return this._error("Scene-owned clip boxes use matrix, not parentTransformId");
-    return this.fromParams({ ...this._params(), parentTransformId: id ?? void 0 });
-  }
-  /**
-   * Atomically replaces bounds, activation and the owner's frame definition.
-   * The resource ID and owner are immutable; omitted matrix means identity.
-   */
-  fromParams(params) {
-    if (this.destroyed || this._retiring || this.scene.destroyed || this.scene._clearing) return this._error("Clip box or scene is being destroyed");
-    const error = !params || params.id !== this.id ? "Clip box ID cannot change" : _SceneClipBox.validate(this.model, params);
-    if (error) return this._error(error);
-    const matrix = params.matrix ?? IDENTITY_MATRIX;
-    if ((params.parentTransformId ?? null) === (this._parent?.id ?? null) && params.active !== false === this._active && Array.from(params.aabb).every((value, index) => value === this._aabb[index]) && (this.model || Array.from(matrix).every((value, index) => value === this._matrix[index]))) {
-      return { ok: true, value: void 0 };
-    }
-    this._parent?._clipBoxes?.delete(this);
-    this._parent = this.model && params.parentTransformId ? this.model.transforms[params.parentTransformId] : null;
-    if (this._parent) (this._parent._clipBoxes ??= /* @__PURE__ */ new Set()).add(this);
-    this._aabb = Array.from(params.aabb);
-    this._active = params.active !== false;
-    if (!this.model) this._matrix = createMat4Float64(matrix);
-    this._changed();
-    return { ok: true, value: void 0 };
-  }
-  toParams() {
-    return this.destroyed ? this._error("Clip box is destroyed") : { ok: true, value: this._params() };
-  }
-  /**
-   * Fails while any mesh references this resource, including an inactive box.
-   */
-  destroy() {
-    if (this.destroyed || this._meshes.size) return this._error("Clip box is destroyed or still referenced by meshes");
-    this._parent?._clipBoxes?.delete(this);
-    this._parent = null;
-    if (this.model) delete this.model.clipBoxes[this.id];
-    delete this.scene.clipBoxes[this.uniqueId];
-    this.destroyed = true;
-    this._onUnused = void 0;
-    this.scene.events.onSceneClipBoxDestroyed.dispatch(this.scene, this);
-    return { ok: true, value: void 0 };
-  }
-  /**
-   * @internal Releases a dependency, including references from other models.
-   */
-  _releaseMesh(mesh) {
-    this._meshes.delete(mesh);
-    if (!this._meshes.size && !this.destroyed) this._onUnused?.();
-  }
-  /**
-   * @internal Emits only metadata changes; geometry and morph buffers are untouched.
-   */
-  _changed() {
-    const scene = this.scene;
-    scene.clipBoxVersion++;
-    scene.events.onSceneClipBoxChanged.dispatch(scene, this);
-    for (const mesh of this._meshes) scene.events.onSceneMeshClipBoxChanged.dispatch(scene, mesh);
-  }
-  /**
-   * @internal Three row vectors mapping coordinates relative to origin to [-1,1].
-   * Compose in Float64 before upload to preserve RTC precision. Inactive boxes
-   * map to zero; a singular frame maps outside the box (fail closed).
-   */
-  _relativeRows(origin2, target = new Float32Array(12)) {
-    target.fill(0);
-    if (!this._active) return target;
-    const m = createMat4Float64(this.worldMatrix);
-    m[12] -= origin2[0];
-    m[13] -= origin2[1];
-    m[14] -= origin2[2];
-    const d = m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) + m[8] * (m[1] * m[6] - m[5] * m[2]);
-    if (!Number.isFinite(d) || d === 0) {
-      target[3] = 2;
-      return target;
-    }
-    inverseMat4(m, m);
-    for (let row = 0; row < 3; row++) {
-      const size = this._aabb[row + 3] - this._aabb[row];
-      for (let col = 0; col < 4; col++) target[row * 4 + col] = m[col * 4 + row] * (2 / size);
-      target[row * 4 + 3] -= (this._aabb[row] + this._aabb[row + 3]) / size;
-    }
-    if (!target.every(Number.isFinite)) {
-      target.fill(0);
-      target[3] = 2;
-    }
-    return target;
-  }
-  /**
-   * Tests a scene-world surface point; boundaries are retained.
-   */
-  containsWorldPoint(point) {
-    if (!this._active) return true;
-    const rows = this._relativeRows(point);
-    return Math.abs(rows[3]) <= 1 && Math.abs(rows[7]) <= 1 && Math.abs(rows[11]) <= 1;
-  }
-  _params() {
-    return {
-      id: this.id,
-      aabb: this.aabb,
-      active: this._active,
-      ...this.model ? { parentTransformId: this._parent?.id } : { matrix: Array.from(this._matrix) }
-    };
-  }
-  _error(error) {
-    return this.scene.logError({ ok: false, type: 2 /* InvalidInput */, error: `[SceneClipBox] ${error}` });
-  }
-};
-
-// ../sdk-oct2/src/model/scene/internal/rollbackCreatedComponents.ts
-function rollbackCreatedComponents(components) {
-  const errors = [];
-  for (let i = components.length - 1; i >= 0; i--) {
-    const component = components[i];
-    if (component.destroyed) continue;
-    try {
-      const result = component._destroyForRollback?.() ?? component.destroy();
-      if (result?.ok === false) errors.push(result.error);
-    } catch (error) {
-      errors.push(String(error));
-    }
-  }
-  return errors.length ? { ok: false, type: 1 /* InvalidOperation */, error: `Rollback failed: ${errors.join("; ")}` } : { ok: true, value: void 0 };
-}
-
-// ../sdk-oct2/src/model/scene/validateGeometryNumbers.ts
-function validateGeometryNumbers(params, vertexCount2) {
-  const checkAttributes = (values2, prefix) => {
-    if (!values2) return `${prefix} is missing`;
-    for (const key of [
-      "positions",
-      "normals",
-      "uvs",
-      "colors",
-      "positionsCompressed",
-      "normalsCompressed",
-      "uvsCompressed",
-      "colorsCompressed",
-      "aabb",
-      "uvsDecompressMatrix",
-      "scales",
-      "rotations"
-    ]) {
-      const array = values2[key];
-      if (array == null) continue;
-      if (!Number.isSafeInteger(array.length) || array.length < 0) return `${prefix}.${key} must be an array`;
-      for (let i = 0; i < array.length; i++) {
-        if (!Number.isFinite(array[i])) return `${prefix}.${key}[${i}] must be finite`;
-        if (!Number.isFinite(Math.fround(array[i]))) return `${prefix}.${key}[${i}] exceeds the supported Float32 range`;
-      }
-    }
-    if (values2.aabb && (values2.aabb[0] > values2.aabb[3] || values2.aabb[1] > values2.aabb[4] || values2.aabb[2] > values2.aabb[5])) {
-      return `${prefix}.aabb has inverted bounds`;
-    }
-    for (const key of ["texCoords", "texCoordsCompressed", "texCoordsDecompressMatrices"]) {
-      for (const [channel, array] of Object.entries(values2[key] ?? {})) {
-        if (!Number.isSafeInteger(Number(channel)) || Number(channel) < 0) return `Invalid texture coordinate channel ${channel}`;
-        const error2 = checkAttributes({ uvs: array }, `${prefix}.${key}[${channel}]`);
-        if (error2) return error2;
-      }
-    }
-  };
-  const error = checkAttributes(params, "geometry");
-  if (error) return error;
-  for (const key of ["frames", "vertexStates", "framesCompressed", "vertexStatesCompressed", "morphTargets"]) {
-    const states = params[key];
-    if (states == null) continue;
-    if (!Array.isArray(states)) return `${key} must be an array`;
-    for (let i = 0; i < states.length; i++) {
-      const stateError = checkAttributes(states[i], `${key}[${i}]`);
-      if (stateError) return stateError;
-    }
-  }
-  for (const key of ["indices", "edgeIndices"]) {
-    const indices = params[key];
-    if (!indices) continue;
-    for (let i = 0; i < indices.length; i++) {
-      if (!Number.isSafeInteger(indices[i]) || indices[i] < 0 || indices[i] >= vertexCount2) {
-        return `${key}[${i}] must be an integer within the vertex range`;
-      }
-    }
-  }
-  if (params.scales && params.scales.length !== vertexCount2 * 3) return "Splat scales must contain three values per vertex";
-  if (params.rotations && params.rotations.length !== vertexCount2 * 4) return "Splat rotations must contain four values per vertex";
-}
-
-// ../sdk-oct2/src/model/scene/representation/copyRepresentationParams.ts
-var ownedJson = /* @__PURE__ */ new WeakSet();
-function copyJson(value, ancestors = /* @__PURE__ */ new Set()) {
-  if (value === null || typeof value === "string" || typeof value === "boolean")
-    return value;
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value !== "object" || ancestors.has(value))
-    throw new Error("Representation parameters must be finite, acyclic JSON");
-  if (ownedJson.has(value)) return value;
-  ancestors.add(value);
-  let result;
-  if (Array.isArray(value)) {
-    const array = new Array(value.length);
-    for (let i = 0; i < array.length; i++) {
-      if (i in value) array[i] = copyJson(value[i], ancestors);
-    }
-    result = Object.freeze(array);
-  } else {
-    if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
-      throw new Error("Representation parameters must contain only plain JSON objects");
-    }
-    const object = /* @__PURE__ */ Object.create(null);
-    for (const [key, item] of Object.entries(value)) object[key] = copyJson(item, ancestors);
-    result = Object.freeze(object);
-  }
-  ancestors.delete(value);
-  ownedJson.add(result);
   return result;
 }
-function copyRepresentationParams(params) {
-  if (typeof params.id !== "string" || !params.id || typeof params.type !== "string" || !params.type || !Number.isSafeInteger(params.schemaVersion) || params.schemaVersion < 1) {
-    throw new Error("Representation requires id, type and a positive schemaVersion");
-  }
-  const b2 = params.localBounds;
-  if (!b2 || b2.length !== 6 || !b2.every(Number.isFinite) || b2[0] > b2[3] || b2[1] > b2[4] || b2[2] > b2[5]) {
-    throw new Error("Representation localBounds must be a finite ordered AABB");
-  }
-  if (!params.parameters || Array.isArray(params.parameters) || typeof params.parameters !== "object") {
-    throw new Error("Representation parameters must be a JSON object");
-  }
-  const resources = /* @__PURE__ */ Object.create(null);
-  if (!params.resources || typeof params.resources !== "object" || Array.isArray(params.resources))
-    throw new Error("Expected resource references");
-  for (const [name14, id] of Object.entries(params.resources)) {
-    if (!name14 || typeof id !== "string" || !id) throw new Error("Invalid representation resource reference");
-    resources[name14] = id;
-  }
-  const fallback = params.fallback ?? "bounds";
-  if (!["bounds", "hidden", "standard"].includes(fallback))
-    throw new Error("Invalid representation fallback");
-  return Object.freeze({
-    id: params.id,
-    type: params.type,
-    schemaVersion: params.schemaVersion,
-    parameters: copyJson(params.parameters),
-    resources: Object.freeze(resources),
-    localBounds: Object.freeze([...b2]),
-    fallback
-  });
-}
 
-// ../sdk-oct2/src/model/scene/representation/SceneRepresentation.ts
-var SceneRepresentation = class {
-  /** @internal Construct through SceneModel.createRepresentation. */
-  constructor(model, params) {
-    this.model = model;
-    this.params = copyRepresentationParams(params);
+// ../sdk-oct2/src/base/math/compression.ts
+var translate = createMat4Float64();
+var scale = createMat4Float64();
+function decompressPoint3WithMat4(position, decompressMatrix, dest = position) {
+  dest[0] = position[0] * decompressMatrix[0] + decompressMatrix[12];
+  dest[1] = position[1] * decompressMatrix[5] + decompressMatrix[13];
+  dest[2] = position[2] * decompressMatrix[10] + decompressMatrix[14];
+  return dest;
+}
+function decompressPoint3WithAABB3(position, aabb, dest = position) {
+  const xScale = (aabb[3] - aabb[0]) / 65535;
+  const xOffset = aabb[0];
+  const yScale = (aabb[4] - aabb[1]) / 65535;
+  const yOffset = aabb[1];
+  const zScale = (aabb[5] - aabb[2]) / 65535;
+  const zOffset = aabb[2];
+  dest[0] = position[0] * xScale + xOffset;
+  dest[1] = position[1] * yScale + yOffset;
+  dest[2] = position[2] * zScale + zOffset;
+  return dest;
+}
+function decompressPositions3WithAABB3(positions, aabb, dest = new Float32Array(positions.length)) {
+  const xScale = (aabb[3] - aabb[0]) / 65535;
+  const xOffset = aabb[0];
+  const yScale = (aabb[4] - aabb[1]) / 65535;
+  const yOffset = aabb[1];
+  const zScale = (aabb[5] - aabb[2]) / 65535;
+  const zOffset = aabb[2];
+  for (let i = 0; i < positions.length; i += 3) {
+    dest[i] = positions[i] * xScale + xOffset;
+    dest[i + 1] = positions[i + 1] * yScale + yOffset;
+    dest[i + 2] = positions[i + 2] * zScale + zOffset;
   }
-  model;
-  params;
-  _revision = 0;
-  /** Whether the owning model has removed this definition. Do not set directly. */
-  destroyed = false;
-  /** Stable identifier within model.representations. */
-  get id() {
-    return this.params.id;
+  return dest;
+}
+function decompressUVs(uvs, decompressMatrix, dest = new Float32Array(uvs.length)) {
+  if (uvs.length % 2 !== 0 || decompressMatrix.length < 8) {
+    throw new Error("Invalid input: UVs must be a multiple of 2, and decompressMatrix must have at least 8 elements.");
   }
-  /** Application-owned type matched by schemas and renderer plugins. */
-  get type() {
-    return this.params.type;
+  for (let i = 0, len = uvs.length; i < len; i += 2) {
+    dest[i] = uvs[i] * decompressMatrix[0] + decompressMatrix[6];
+    dest[i + 1] = uvs[i + 1] * decompressMatrix[4] + decompressMatrix[7];
   }
-  /** Version of the semantic parameter/resource schema. */
-  get schemaVersion() {
-    return this.params.schemaVersion;
+  return dest;
+}
+function quantizePositions3(positions, aabb, out) {
+  const lenPositions = positions.length;
+  const positionsCompressed = out ?? new Uint16Array(lenPositions);
+  if (positionsCompressed.length !== lenPositions) throw new Error("quantizePositions3: destination length must match positions");
+  const [xmin, ymin, zmin, xmax, ymax, zmax] = aabb;
+  const xwid = xmax - xmin;
+  const ywid = ymax - ymin;
+  const zwid = zmax - zmin;
+  const widths = [xwid, ywid, zwid];
+  if (![...aabb, ...widths].every(Number.isFinite) || widths.some((width) => width < 0)) {
+    throw new Error("quantizePositions3: bounds must be finite and ordered");
   }
-  /** Deeply frozen parameters. Replace through SceneModel.updateRepresentation. */
-  get parameters() {
-    return this.params.parameters;
+  for (let i = 0; i < lenPositions; i++) {
+    if (!Number.isFinite(positions[i])) throw new Error("quantizePositions3: positions must be finite");
+    const axis = i % 3;
+    const normalized = widths[axis] === 0 ? 0 : (positions[i] - aabb[axis]) / widths[axis];
+    positionsCompressed[i] = Math.max(0, Math.min(65535, Math.round(normalized * 65535)));
   }
-  /** Frozen semantic input names mapped to resource IDs in this model. */
-  get resources() {
-    return this.params.resources;
-  }
-  /** Frozen authored local AABB, independent of camera and renderer visibility. */
-  get localBounds() {
-    return this.params.localBounds;
-  }
-  /** Authored fallback intent, resolved to bounds when omitted at creation. */
-  get fallback() {
-    return this.params.fallback;
-  }
-  /** Starts at zero and increments after each successful model-mediated update. */
-  get revision() {
-    return this._revision;
-  }
-  /**
-   * Returns a portable definition with no executable state.
-   *
-   * @returns A new outer object whose nested values are immutable and safely shared.
-   */
-  toParams() {
-    return { ...this.params };
-  }
-  /** @internal Called by the owning model only after atomic validation. */
-  _replace(params) {
-    this.params = params;
-    this._revision++;
-  }
-  /** @internal Removes only this transaction-owned instance, preserving unresolved references. */
-  _destroyForRollback() {
-    return this.model._rollbackRepresentation(this);
-  }
-  /**
-   * Removes this definition through its owning model.
-   *
-   * @returns Success, or InvalidOperation when a mesh still binds this definition.
-   */
-  destroy() {
-    if (this.destroyed || this.model.representations[this.id] !== this) {
-      return { ok: false, type: 1 /* InvalidOperation */, error: "[SceneRepresentation.destroy] Component already destroyed" };
+  return positionsCompressed;
+}
+function compressRGBColors(colors) {
+  const len = colors.length;
+  const compressed = new Uint16Array(len);
+  for (let i = 0; i < len; i++) {
+    if (colors[i] < 0 || colors[i] > 1) {
+      throw new Error(`Color value at index ${i} (${colors[i]}) is out of range [0, 1].`);
     }
-    return this.model.destroyRepresentation(this.id);
+    compressed[i] = Math.round(colors[i] * 255);
   }
-};
-
-// ../sdk-oct2/src/model/scene/representation/validateDataResourceParams.ts
-function validateDataResourceParams(params) {
-  if (typeof params.id !== "string" || !params.id) throw new Error("Resource id is required");
-  if (params.kind === "buffer") {
-    const Type = { float32: Float32Array, uint32: Uint32Array, uint8: Uint8Array }[params.componentType];
-    if (!Type || !(params.data instanceof Type))
-      throw new Error("Resource componentType does not match its typed array");
-  } else if (params.kind === "texture2d") {
-    const channels = { r32float: 1, rg32float: 2, rgba32float: 4, rgba8unorm: 4 }[params.format];
-    const Type = params.format === "rgba8unorm" ? Uint8Array : Float32Array;
-    if (!channels || !Number.isSafeInteger(params.width) || !Number.isSafeInteger(params.height) || params.width < 1 || params.height < 1 || !(params.data instanceof Type) || params.data.length !== params.width * params.height * channels)
-      throw new Error("Invalid numerical texture shape or data type");
-  } else throw new Error("Unsupported scene data resource kind");
+  return compressed;
 }
-
-// ../sdk-oct2/src/model/scene/representation/copyDataResourceParams.ts
-function copyDataResourceParams(params) {
-  validateDataResourceParams(params);
-  return { ...params, data: params.data.slice() };
+function packUVsToFloat32(uvs) {
+  if (uvs instanceof Float32Array) {
+    return uvs;
+  }
+  const out = new Float32Array(uvs.length);
+  for (let i = 0, len = uvs.length; i < len; i++) {
+    out[i] = uvs[i];
+  }
+  return out;
 }
-
-// ../sdk-oct2/src/model/scene/representation/SceneDataResource.ts
-var SceneDataResource = class {
-  /** @internal Construct through SceneModel.createDataResource. */
-  constructor(model, params) {
-    this.model = model;
-    this.params = copyDataResourceParams(params);
-  }
-  model;
-  params;
-  _revision = 0;
-  /** Whether the owning model has removed this resource. Do not set directly. */
-  destroyed = false;
-  /** Stable ID within model.dataResources. */
-  get id() {
-    return this.params.id;
-  }
-  /** CPU layout discriminator, independent of any GPU representation. */
-  get kind() {
-    return this.params.kind;
-  }
-  /** Starts at zero; increments only after a successful replacement. */
-  get revision() {
-    return this._revision;
-  }
-  /**
-   * Borrowed CPU storage, readonly by contract; typed arrays cannot be deeply frozen.
-   * Never mutate this array or its underlying buffer. Use model.updateDataResource
-   * to validate replacements and notify consumers. Use toParams for a writable copy.
-   */
-  get data() {
-    return this.params.data;
-  }
-  /** A new metadata object describing layout without copying the numerical payload. */
-  get descriptor() {
-    const { data, ...descriptor } = this.params;
-    return descriptor;
-  }
-  /** @returns A portable descriptor and an independent, writable copy of its typed array. */
-  toParams() {
-    return copyDataResourceParams(this.params);
-  }
-  /** @internal Transfers an already copied, validated replacement from the model. */
-  _replaceFrom(resource) {
-    this.params = resource.params;
-    this._revision++;
-  }
-  /** @internal Removes only this transaction-owned instance, preserving unresolved references. */
-  _destroyForRollback() {
-    return this.model._rollbackDataResource(this);
-  }
-  /** @returns Success, or InvalidOperation while any representation still references this resource. */
-  destroy() {
-    if (this.destroyed || this.model.dataResources[this.id] !== this) {
-      return { ok: false, type: 1 /* InvalidOperation */, error: "[SceneDataResource.destroy] Component already destroyed" };
+function octEncodeNormalsToU16(normals, out) {
+  const numNormals = normals.length / 3 | 0;
+  out ??= new Uint16Array(numNormals * 2);
+  if (out.length !== numNormals * 2) throw new Error("octEncodeNormalsToU16: destination length must match normal count");
+  for (let i = 0; i < numNormals; i++) {
+    let nx = normals[i * 3];
+    let ny = normals[i * 3 + 1];
+    let nz = normals[i * 3 + 2];
+    const invLen = 1 / (Math.sqrt(nx * nx + ny * ny + nz * nz) || 1);
+    nx *= invLen;
+    ny *= invLen;
+    nz *= invLen;
+    const denom = Math.abs(nx) + Math.abs(ny) + Math.abs(nz) || 1;
+    let ex = nx / denom;
+    let ey = ny / denom;
+    if (nz < 0) {
+      const tx = (1 - Math.abs(ey)) * (ex >= 0 ? 1 : -1);
+      const ty = (1 - Math.abs(ex)) * (ey >= 0 ? 1 : -1);
+      ex = tx;
+      ey = ty;
     }
-    return this.model.destroyDataResource(this.id);
+    out[i * 2] = Math.round((ex * 0.5 + 0.5) * 65535);
+    out[i * 2 + 1] = Math.round((ey * 0.5 + 0.5) * 65535);
   }
-};
+  return out;
+}
+function octDecodeNormalsU16(octs, result = new Float32Array(octs.length / 2 * 3)) {
+  return decodeOctNormalsU16Into(octs, result);
+}
 
-// ../sdk-oct2/src/model/scene/buildEdgeIndices.ts
-var uniquePositions = [];
-var indicesLookup = [];
-var indicesReverseLookup = [];
-var weldedIndices = [];
-var faces = [];
-var numFaces = 0;
-var compa = new Uint16Array(3);
-var compb = new Uint16Array(3);
-var compc = new Uint16Array(3);
-var a = createVec3Float64();
-var b = createVec3Float64();
-var c = createVec3Float64();
-var cb = createVec3Float64();
-var ab = createVec3Float64();
-var cross2 = createVec3Float64();
-var normal = createVec3Float64();
-function weldVertices(positions, indices) {
-  const positionsMap = {};
-  let vx;
-  let vy;
-  let vz;
-  let key;
-  const precisionPoints = 4;
-  const precision = Math.pow(10, precisionPoints);
-  let i;
-  let len;
-  let lenUniquePositions = 0;
-  for (i = 0, len = positions.length; i < len; i += 3) {
-    vx = positions[i];
-    vy = positions[i + 1];
-    vz = positions[i + 2];
-    key = Math.round(vx * precision) + "_" + Math.round(vy * precision) + "_" + Math.round(vz * precision);
-    if (positionsMap[key] === void 0) {
-      positionsMap[key] = lenUniquePositions / 3;
-      uniquePositions[lenUniquePositions++] = vx;
-      uniquePositions[lenUniquePositions++] = vy;
-      uniquePositions[lenUniquePositions++] = vz;
-    }
-    indicesLookup[i / 3] = positionsMap[key];
-  }
-  for (i = 0, len = indices.length; i < len; i++) {
-    weldedIndices[i] = indicesLookup[indices[i]];
-    indicesReverseLookup[weldedIndices[i]] = indices[i];
-  }
+// ../sdk-oct2/src/base/math/boundaries.ts
+var tempVec3a = createVec3Float64();
+var tempVec3b = createVec3Float64();
+var tempVec3c = createVec3Float64();
+var tempMat4a3 = createMat4Float64();
+function createAABB3Float64(values2) {
+  return new Float64Array(values2 || 6);
 }
-function buildFaces(numIndices, aabb) {
-  numFaces = 0;
-  for (let i = 0, len = numIndices; i < len; i += 3) {
-    const ia = weldedIndices[i] * 3;
-    const ib = weldedIndices[i + 1] * 3;
-    const ic = weldedIndices[i + 2] * 3;
-    if (aabb) {
-      compa[0] = uniquePositions[ia];
-      compa[1] = uniquePositions[ia + 1];
-      compa[2] = uniquePositions[ia + 2];
-      compb[0] = uniquePositions[ib];
-      compb[1] = uniquePositions[ib + 1];
-      compb[2] = uniquePositions[ib + 2];
-      compc[0] = uniquePositions[ic];
-      compc[1] = uniquePositions[ic + 1];
-      compc[2] = uniquePositions[ic + 2];
-      decompressPoint3WithAABB3(compa, aabb, a);
-      decompressPoint3WithAABB3(compb, aabb, b);
-      decompressPoint3WithAABB3(compc, aabb, c);
-    } else {
-      a[0] = uniquePositions[ia];
-      a[1] = uniquePositions[ia + 1];
-      a[2] = uniquePositions[ia + 2];
-      b[0] = uniquePositions[ib];
-      b[1] = uniquePositions[ib + 1];
-      b[2] = uniquePositions[ib + 2];
-      c[0] = uniquePositions[ic];
-      c[1] = uniquePositions[ic + 1];
-      c[2] = uniquePositions[ic + 2];
-    }
-    subVec3(c, b, cb);
-    subVec3(a, b, ab);
-    cross3Vec3(cb, ab, cross2);
-    normalizeVec3(cross2, normal);
-    const face = faces[numFaces] || (faces[numFaces] = { normal: createVec3Float64() });
-    face.normal[0] = normal[0];
-    face.normal[1] = normal[1];
-    face.normal[2] = normal[2];
-    numFaces++;
-  }
+function collapseAABB3(aabb) {
+  aabb.set([MAX_DOUBLE, MAX_DOUBLE, MAX_DOUBLE, MIN_DOUBLE, MIN_DOUBLE, MIN_DOUBLE]);
+  return aabb;
 }
-function buildEdgeIndices(positions, indices, aabb, edgeThreshold) {
-  weldVertices(positions, indices);
-  buildFaces(indices.length, aabb);
-  const edgeIndices = [];
-  const thresholdDot = Math.cos(DEGTORAD * edgeThreshold);
-  const edges = {};
-  let edge1;
-  let edge2;
-  let index1;
-  let index2;
-  let key;
-  let largeIndex = false;
-  let edge;
-  let normal1;
-  let normal2;
-  let dot3;
-  let ia;
-  let ib;
-  for (let i = 0, len = indices.length; i < len; i += 3) {
-    const faceIndex = i / 3;
+function expandAABB3Points3(aabb, positions) {
+  for (let i = 0; i < positions.length; i += 3) {
     for (let j = 0; j < 3; j++) {
-      edge1 = weldedIndices[i + j];
-      edge2 = weldedIndices[i + (j + 1) % 3];
-      index1 = Math.min(edge1, edge2);
-      index2 = Math.max(edge1, edge2);
-      key = index1 + "," + index2;
-      if (edges[key] === void 0) {
-        edges[key] = {
-          index1,
-          index2,
-          face1: faceIndex,
-          face2: void 0
-        };
-      } else {
-        edges[key].face2 = faceIndex;
-      }
+      aabb[j] = Math.min(aabb[j], positions[i + j]);
+      aabb[j + 3] = Math.max(aabb[j + 3], positions[i + j]);
     }
   }
-  for (key in edges) {
-    edge = edges[key];
-    if (edge.face2 !== void 0) {
-      normal1 = faces[edge.face1].normal;
-      normal2 = faces[edge.face2].normal;
-      dot3 = dotVec3(normal1, normal2);
-      if (dot3 > thresholdDot) {
-        continue;
-      }
-    }
-    ia = indicesReverseLookup[edge.index1];
-    ib = indicesReverseLookup[edge.index2];
-    if (!largeIndex && ia > 65535 || ib > 65535) {
-      largeIndex = true;
-    }
-    edgeIndices.push(ia);
-    edgeIndices.push(ib);
-  }
-  return largeIndex ? new Uint32Array(edgeIndices) : new Uint16Array(edgeIndices);
+  return aabb;
 }
+var positions3ToAABB3 = (() => {
+  const p = createVec3Float64();
+  return (positions, aabb = createAABB3Float64(), positionsDecompressMatrix) => {
+    let xmin = MAX_DOUBLE, ymin = MAX_DOUBLE, zmin = MAX_DOUBLE;
+    let xmax = MIN_DOUBLE, ymax = MIN_DOUBLE, zmax = MIN_DOUBLE;
+    for (let i = 0, len = positions.length; i < len; i += 3) {
+      let x = positions[i], y = positions[i + 1], z = positions[i + 2];
+      if (positionsDecompressMatrix) {
+        p[0] = x;
+        p[1] = y;
+        p[2] = z;
+        decompressPoint3WithMat4(p, positionsDecompressMatrix, p);
+        x = p[0];
+        y = p[1];
+        z = p[2];
+      }
+      xmin = Math.min(xmin, x);
+      ymin = Math.min(ymin, y);
+      zmin = Math.min(zmin, z);
+      xmax = Math.max(xmax, x);
+      ymax = Math.max(ymax, y);
+      zmax = Math.max(zmax, z);
+    }
+    aabb[0] = xmin;
+    aabb[1] = ymin;
+    aabb[2] = zmin;
+    aabb[3] = xmax;
+    aabb[4] = ymax;
+    aabb[5] = zmax;
+    return aabb;
+  };
+})();
 
-// ../sdk-oct2/src/model/scene/compressGeometryParams.ts
-function compressGeometryParams(geometryParams) {
-  const sourceVertexStates = geometryParams.vertexStates ?? geometryParams.frames;
-  const basePositions = geometryParams.positions ?? sourceVertexStates?.[0]?.positions;
-  const baseNormals = geometryParams.normals ?? sourceVertexStates?.[0]?.normals;
-  const aabb = collapseAABB3(createAABB3Float64());
-  expandAABB3Points3(aabb, basePositions);
-  const positionsCompressed = quantizePositions3(basePositions, aabb);
-  const vertexStatesCompressed = sourceVertexStates?.map((frame) => {
-    const frameAABB = collapseAABB3(createAABB3Float64());
-    expandAABB3Points3(frameAABB, frame.positions);
-    const expectedFrameUvLen = frame.positions.length / 3 * 2;
-    return {
-      ...frame.id !== void 0 ? { id: frame.id } : {},
-      ...frame.name !== void 0 ? { name: frame.name } : {},
-      ...frame.time !== void 0 ? { time: frame.time } : {},
-      aabb: frameAABB,
-      positionsCompressed: quantizePositions3(frame.positions, frameAABB),
-      normalsCompressed: frame.normals && frame.normals.length === frame.positions.length ? octEncodeNormalsToU16(frame.normals) : void 0,
-      uvsCompressed: frame.uvs && frame.uvs.length === expectedFrameUvLen ? packUVsToFloat32(frame.uvs) : void 0
-    };
-  });
-  const framesCompressed = geometryParams.frames ? vertexStatesCompressed : void 0;
-  const texCoordsCompressed = compressTexCoordChannels(geometryParams.texCoords, geometryParams.uvs, basePositions.length / 3 * 2);
-  const morphTargets = geometryParams.morphTargets?.map((target) => ({
-    ...target.id !== void 0 ? { id: target.id } : {},
-    ...target.name !== void 0 ? { name: target.name } : {},
-    ...target.positions !== void 0 ? { positions: target.positions } : {},
-    ...target.normals !== void 0 ? { normals: target.normals } : {},
-    ...target.uvs !== void 0 ? { uvs: target.uvs } : {}
-  }));
-  if (geometryParams.primitive === PointsPrimitive) {
-    return {
-      id: geometryParams.id,
-      primitive: PointsPrimitive,
-      uvsCompressed: texCoordsCompressed?.[0],
-      texCoordsCompressed,
-      aabb,
-      uvsDecompressMatrix: void 0,
-      positionsCompressed,
-      framesCompressed,
-      vertexStatesCompressed,
-      morphTargets,
-      colorsCompressed: geometryParams.colorsCompressed ? geometryParams.colorsCompressed : geometryParams.colors ? compressRGBColors(geometryParams.colors) : null,
-      origin: null
-    };
-  }
-  if (geometryParams.primitive === GaussianSplatsPrimitive) {
-    return {
-      id: geometryParams.id,
-      primitive: GaussianSplatsPrimitive,
-      uvsCompressed: texCoordsCompressed?.[0],
-      texCoordsCompressed,
-      aabb,
-      positionsCompressed,
-      framesCompressed,
-      vertexStatesCompressed,
-      morphTargets,
-      colorsCompressed: geometryParams.colorsCompressed ? geometryParams.colorsCompressed : geometryParams.colors ? compressRGBColors(geometryParams.colors) : null,
-      scales: geometryParams.scales,
-      rotations: geometryParams.rotations,
-      origin: null
-    };
-  }
-  if (geometryParams.primitive === LinesPrimitive) {
-    return {
-      id: geometryParams.id,
-      primitive: LinesPrimitive,
-      uvsCompressed: texCoordsCompressed?.[0],
-      texCoordsCompressed,
-      aabb,
-      positionsCompressed,
-      framesCompressed,
-      vertexStatesCompressed,
-      morphTargets,
-      colorsCompressed: geometryParams.colorsCompressed ? geometryParams.colorsCompressed : geometryParams.colors ? compressRGBColors(geometryParams.colors) : void 0,
-      indices: geometryParams.indices,
-      origin: null
-    };
-  } else {
-    let edgeIndices = geometryParams.edgeIndices ?? null;
-    if ((geometryParams.primitive === SolidPrimitive || geometryParams.primitive === SurfacePrimitive || geometryParams.primitive === TrianglesPrimitive) && geometryParams.indices && !edgeIndices) {
-      const built = buildEdgeIndices(positionsCompressed, geometryParams.indices, aabb, 10);
-      if (built && built.length > 0) edgeIndices = built;
-    }
-    const normalsCompressed = baseNormals && baseNormals.length === basePositions.length ? octEncodeNormalsToU16(baseNormals) : void 0;
-    const uvsCompressed = texCoordsCompressed?.[0];
-    return {
-      // Assume that closed triangle mesh is decomposed into open surfaces
-      id: geometryParams.id,
-      primitive: geometryParams.primitive,
-      aabb,
-      positionsCompressed,
-      framesCompressed,
-      vertexStatesCompressed,
-      morphTargets,
-      normalsCompressed,
-      uvsCompressed,
-      texCoordsCompressed,
-      colorsCompressed: geometryParams.colorsCompressed ? geometryParams.colorsCompressed : geometryParams.colors ? compressRGBColors(geometryParams.colors) : void 0,
-      indices: geometryParams.indices,
-      edgeIndices,
-      origin: null
-    };
-  }
+// ../sdk-oct2/src/base/math/index.ts
+var MIN_DOUBLE = -Number.MAX_SAFE_INTEGER;
+var MAX_DOUBLE = Number.MAX_SAFE_INTEGER;
+var DEGTORAD = 0.0174532925;
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
-function compressTexCoordChannels(texCoords, uvs, expectedLength) {
-  const result = {};
-  if (texCoords) {
-    for (const key of Object.keys(texCoords)) {
-      const channel = Number(key);
-      const values2 = texCoords[channel];
-      if (Number.isInteger(channel) && channel >= 0 && values2 && values2.length === expectedLength) {
-        result[channel] = packUVsToFloat32(values2);
-      }
-    }
-  }
-  if (uvs && uvs.length === expectedLength) {
-    result[0] = packUVsToFloat32(uvs);
-  }
-  return Object.keys(result).length > 0 ? result : void 0;
-}
-
-// ../sdk-oct2/src/model/scene/validateMorphTargetUVs.ts
-function validateMorphTargetUVs(targets, baseUVs, vertexCount2) {
-  for (let index = 0; index < targets.length; index++) {
-    const uvs = targets[index].uvs;
-    if (uvs === void 0) continue;
-    if (!baseUVs || baseUVs.length !== vertexCount2 * 2) {
-      return `morphTargets[${index}].uvs requires base channel-0 UVs with two values per vertex.`;
-    }
-    if (uvs.length !== baseUVs.length) return `morphTargets[${index}].uvs length must match base UVs.`;
-    for (let i = 0; i < uvs.length; i++) {
-      if (!Number.isFinite(uvs[i])) return `morphTargets[${index}].uvs[${i}] must be finite.`;
-    }
-  }
-}
-
-// ../sdk-oct2/src/model/scene/SceneGeometry.ts
-var SCENE_GEOMETRY_UPDATE_POSITIONS_COMPRESSED = 1 << 0;
-var SCENE_GEOMETRY_UPDATE_INDICES = 1 << 1;
-var SCENE_GEOMETRY_UPDATE_NORMALS_COMPRESSED = 1 << 2;
-var SCENE_GEOMETRY_UPDATE_UVS_COMPRESSED = 1 << 3;
-function narrowIndexArray(indices) {
-  if (!indices || indices.length === 0) {
-    return indices;
-  }
-  let max = 0;
-  for (let i = 0, len = indices.length; i < len; i++) {
-    if (indices[i] > max) {
-      max = indices[i];
-    }
-  }
-  const targetBytes = max < 256 ? 1 : max < 65536 ? 2 : 4;
-  if (ArrayBuffer.isView(indices) && indices.BYTES_PER_ELEMENT <= targetBytes) {
-    return indices;
-  }
-  const src = indices;
-  const narrowed = targetBytes === 1 ? new Uint8Array(src) : targetBytes === 2 ? new Uint16Array(src) : new Uint32Array(src);
-  return narrowed;
-}
-var SceneGeometry = class {
-  /**
-   * ID for the geometry.
-   */
-  id;
-  /**
-   * The global ID of this SceneGeometry, unique among all SceneGeometrys within the Scene,
-   * which is the concatenation of the SceneModel's ID and this SceneGeometry's ID, separated by "__".
-   */
-  uniqueId;
-  /**
-   * The SceneModel that contains this SceneGeometry.
-   */
-  model;
-  /**
-   * Primitive type.
-   *
-   * Possible values are {@link base!constants.SolidPrimitive | SolidPrimitive}, {@link base!constants.SurfacePrimitive | SurfacePrimitive},
-   * {@link base!constants.LinesPrimitive | LinesPrimitive}, {@link base!constants.PointsPrimitive | PointsPrimitive}
-   * and {@link base!constants.TrianglesPrimitive | TrianglesPrimitive}.
-   */
-  primitive;
-  /**
-   * Axis-aligned, non-quantized 3D boundary of the geometry's vertex positions.
-   */
-  aabb;
-  /**
-   * 4x4 matrix to de-quantize the geometry's UV coordinates, when UVs are provided.
-   */
-  uvsDecompressMatrix;
-  /**
-   * Current/base 3D vertex positions, quantized as 16-bit integers.
-   *
-   * Internally, the Viewer dequantizes these using {@link SceneGeometry.aabb | SceneGeometry.aabb}, which provides their unquantized 3D boundary.
-   *
-   * When geometry was authored with {@link SceneGeometry.framesCompressed | framesCompressed}
-   * and no top-level positions, this is initialized from frame zero.
-   */
-  _positionsCompressed;
-  _indices;
-  _normalsCompressed;
-  _uvsCompressed;
-  /**
-   * Complete fixed-topology geometry frames, each carrying replacement
-   * positions and optional normals. These are complete vertex states, not
-   * deltas from the base geometry. The first frame can act as the geometry's
-   * current/base positions when the geometry was authored without top-level
-   * `positions`.
-   *
-   * Renderers treat frames as immutable geometry-owned data. Meshes select an
-   * interpolation time through {@link SceneMesh.frameTime}; changing that time
-   * updates per-mesh animation state, not the shared geometry payload.
-   */
-  framesCompressed;
-  /**
-   * Complete untimed fixed-topology replacement vertex states.
-   */
-  vertexStatesCompressed;
-  /**
-   * Weighted morph target deltas relative to this geometry's base attributes.
-   */
-  morphTargets;
-  /**
-   * Monotonically increases each time fixed-count dynamic geometry data is
-   * replaced through {@link SceneGeometry.positionsCompressed} or
-   * {@link SceneGeometry.indices}, {@link SceneGeometry.normalsCompressed} or
-   * {@link SceneGeometry.uvsCompressed}.
-   */
-  version = 0;
-  /**
-   * Bitmask describing the most recent fixed-count dynamic update. Renderers
-   * use this during {@link SceneEvents.onSceneGeometryUpdated} to choose a
-   * narrow in-place upload path when possible.
-   */
-  lastUpdateFlags = 0;
-  /**
-   * UV coordinates, packed as 32-bit floats (one `Float32Array` of
-   * length `2 × vertexCount`). UVs ship to the GPU uncompressed so
-   * tiling values (UVs outside `[0, 1]`) survive intact — the shader
-   * applies a per-fragment `fract()` before transforming into the
-   * mesh's atlas sub-rect.
-   *
-   * Assigning replaces channel zero on a dynamic model. UVs must already
-   * exist, keep the same length, and contain only finite values. Values outside
-   * `[0, 1]` are supported. A successful update synchronizes channel zero in
-   * {@link SceneGeometry.texCoordsCompressed}, increments {@link SceneGeometry.version}
-   * and dispatches {@link SceneEvents.onSceneGeometryUpdated} for in-place upload.
-   * Mutating the returned array alone does not notify renderers.
-   */
-  get uvsCompressed() {
-    return this._uvsCompressed;
-  }
-  set uvsCompressed(uvsCompressed) {
-    let error;
-    let type = 2 /* InvalidInput */;
-    if (this.destroyed) {
-      error = "SceneGeometry already destroyed";
-      type = 1 /* InvalidOperation */;
-    } else if (this.model.updateMode !== "dynamic") {
-      error = 'The parent SceneModel must use updateMode: "dynamic".';
-      type = 1 /* InvalidOperation */;
-    } else if (!this._uvsCompressed) {
-      error = "Cannot assign UVs to geometry that was created without UVs.";
-      type = 1 /* InvalidOperation */;
-    } else if (!uvsCompressed || uvsCompressed.length !== this._uvsCompressed.length) {
-      error = `Expected ${this._uvsCompressed.length} UV components, got ${uvsCompressed?.length ?? 0}.`;
-    } else {
-      for (let i = 0; i < uvsCompressed.length; i++) {
-        if (!Number.isFinite(uvsCompressed[i])) {
-          error = "UV components must be finite.";
-          break;
-        }
-      }
-    }
-    if (error) {
-      this.model.scene.logError({ ok: false, type, error: `[SceneGeometry.uvsCompressed] ${error}` });
-      return;
-    }
-    this._uvsCompressed = uvsCompressed;
-    this.texCoordsCompressed[0] = uvsCompressed;
-    this.version++;
-    this.lastUpdateFlags = SCENE_GEOMETRY_UPDATE_UVS_COMPRESSED;
-    this.model.scene.events.onSceneGeometryUpdated.dispatch(this.model.scene, this);
-  }
-  /**
-   * Indexed texture-coordinate channels, packed as 32-bit floats.
-   *
-   * Channel `0` is equivalent to {@link SceneGeometry.uvsCompressed}.
-   */
-  texCoordsCompressed;
-  /**
-   * Vertex RGBA colors, quantized as 8-bit integers.
-   */
-  colorsCompressed;
-  /**
-   * Vertex normals, octahedral-encoded as pairs of 16-bit unsigned integers.
-   *
-   * When defined, the renderer reads these per-vertex and uses them for
-   * smooth shading; when undefined, fragments derive a flat face normal
-   * from view-space position derivatives.
-   */
-  get normalsCompressed() {
-    return this._normalsCompressed;
-  }
-  /**
-   * Primitive indices.
-   *
-   * This is either an array of 8-bit, 16-bit or 32-bit values.
-   */
-  get indices() {
-    return this._indices;
-  }
-  /**
-   * Edge indices.
-   *
-   * This is either an array of 8-bit, 16-bit or 32-bit values.
-   */
-  edgeIndices;
-  /**
-   * Per-splat scales — 3 floats per splat. Only present for
-   * {@link base!constants.GaussianSplatsPrimitive | GaussianSplatsPrimitive} geometry.
-   */
-  scales;
-  /**
-   * Per-splat rotation quaternions — 4 floats per splat, `xyzw`. Only present for
-   * {@link base!constants.GaussianSplatsPrimitive | GaussianSplatsPrimitive} geometry.
-   */
-  rotations;
-  /**
-   * The count of {@link SceneMesh | SceneMeshes} that reference this SceneGeometry.
-   */
-  numMeshes;
-  /**
-   * True if this SceneGeometry has been destroyed.
-   */
-  destroyed = false;
-  /**
-   * @private
-   */
-  constructor(model, params) {
-    this.model = model;
-    this.id = params.id;
-    this.uniqueId = `${model.id}__${this.id}`;
-    this.primitive = params.primitive;
-    this._positionsCompressed = params.positionsCompressed;
-    this.vertexStatesCompressed = params.vertexStatesCompressed ?? params.framesCompressed;
-    this.framesCompressed = params.framesCompressed ?? (params.vertexStatesCompressed?.some((state) => state.time !== void 0) ? params.vertexStatesCompressed : void 0);
-    this.morphTargets = params.morphTargets;
-    this.texCoordsCompressed = normalizeTexCoordsCompressed(params.texCoordsCompressed, params.uvsCompressed);
-    this._uvsCompressed = this.texCoordsCompressed?.[0] ?? params.uvsCompressed;
-    this.colorsCompressed = params.colorsCompressed;
-    this._normalsCompressed = params.normalsCompressed;
-    this._indices = narrowIndexArray(params.indices);
-    this.edgeIndices = narrowIndexArray(params.edgeIndices);
-    this.scales = params.scales;
-    this.rotations = params.rotations;
-    this.aabb = createAABB3Float64(params.aabb);
-    this.numMeshes = 0;
-  }
-  /**
-   * Gets or sets 3D vertex positions, quantized as 16-bit integers.
-   *
-   * Assigning this property is a fixed-topology dynamic update. The new array
-   * must have the same length as the original positions array and the parent
-   * {@link SceneModel} must use `updateMode: "dynamic"`. On success xeokit
-   * bumps {@link SceneGeometry.version} and dispatches
-   * {@link SceneEvents.onSceneGeometryUpdated}; renderers and BVH-backed
-   * picking can then refresh their buffers from the new compressed positions.
-   *
-   * The geometry AABB is not changed by this setter. Quantize replacement
-   * positions against the existing {@link SceneGeometry.aabb}; recreate the
-   * geometry when the dynamic range or topology needs to change.
-   *
-   * This does not regenerate normals or edge indices. Use geometries without
-   * explicit normals for flat derivative-based shading, or recreate geometry
-   * when topology-derived attributes need to change.
-   */
-  get positionsCompressed() {
-    return this._positionsCompressed;
-  }
-  set positionsCompressed(positionsCompressed) {
-    if (this.destroyed) {
-      this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: "[SceneGeometry.positionsCompressed] SceneGeometry already destroyed"
-      });
-      return;
-    }
-    if (!positionsCompressed) {
-      this.model.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneGeometry.positionsCompressed] Missing required value."
-      });
-      return;
-    }
-    if (this.model.updateMode !== "dynamic") {
-      this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: '[SceneGeometry.positionsCompressed] The parent SceneModel must use updateMode: "dynamic".'
-      });
-      return;
-    }
-    if (positionsCompressed.length !== this._positionsCompressed.length) {
-      this.model.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneGeometry.positionsCompressed] Expected ${this._positionsCompressed.length} position components, got ${positionsCompressed.length}.`
-      });
-      return;
-    }
-    if (positionsCompressed.length % 3 !== 0) {
-      this.model.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneGeometry.positionsCompressed] Length must be a multiple of 3."
-      });
-      return;
-    }
-    this._positionsCompressed = positionsCompressed;
-    this.version++;
-    this.lastUpdateFlags = SCENE_GEOMETRY_UPDATE_POSITIONS_COMPRESSED;
-    this.model.scene.events.onSceneGeometryUpdated.dispatch(this.model.scene, this);
-  }
-  /**
-   * Gets or sets primitive connectivity indices.
-   *
-   * Assigning this property is a fixed-topology dynamic update. The replacement
-   * array must have the same number of indices as the existing array and the
-   * parent {@link SceneModel} must use `updateMode: "dynamic"`. On success
-   * xeokit stores a narrowed copy when possible, bumps
-   * {@link SceneGeometry.version} and dispatches
-   * {@link SceneEvents.onSceneGeometryUpdated}; renderers can then refresh
-   * their DTX/VBO/WebGPU buffers and picking structures from the new
-   * connectivity.
-   *
-   * This does not regenerate normals or edge indices. Use flat
-   * derivative-based shading and omit edge indices for fully dynamic topology,
-   * or recreate geometry when topology-derived attributes need to change.
-   */
-  set indices(indices) {
-    if (this.destroyed) {
-      this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: "[SceneGeometry.indices] SceneGeometry already destroyed"
-      });
-      return;
-    }
-    if (this.model.updateMode !== "dynamic") {
-      this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: '[SceneGeometry.indices] The parent SceneModel must use updateMode: "dynamic".'
-      });
-      return;
-    }
-    if (!this._indices) {
-      this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: "[SceneGeometry.indices] Cannot assign indices to geometry that was created without indices."
-      });
-      return;
-    }
-    if (!indices) {
-      this.model.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneGeometry.indices] Missing required value."
-      });
-      return;
-    }
-    if (indices.length !== this._indices.length) {
-      this.model.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneGeometry.indices] Expected ${this._indices.length} indices, got ${indices.length}.`
-      });
-      return;
-    }
-    if (this.primitive === LinesPrimitive && indices.length % 2 !== 0) {
-      this.model.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneGeometry.indices] Length must be a multiple of 2 for line geometry."
-      });
-      return;
-    }
-    if ((this.primitive === TrianglesPrimitive || this.primitive === SolidPrimitive || this.primitive === SurfacePrimitive) && indices.length % 3 !== 0) {
-      this.model.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneGeometry.indices] Length must be a multiple of 3 for triangle geometry."
-      });
-      return;
-    }
-    if (this.primitive === PointsPrimitive || this.primitive === GaussianSplatsPrimitive) {
-      this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: "[SceneGeometry.indices] Cannot assign indices to point or Gaussian splat geometry."
-      });
-      return;
-    }
-    const vertexCount2 = this._positionsCompressed.length / 3;
-    for (let i = 0, len = indices.length; i < len; i++) {
-      const index = indices[i];
-      if (index < 0 || index >= vertexCount2) {
-        this.model.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneGeometry.indices] Indices out of range of vertex positions."
-        });
-        return;
-      }
-      if (this.uvsCompressed) {
-        const uvCount = this.uvsCompressed.length / 2;
-        if (index >= uvCount) {
-          this.model.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: "[SceneGeometry.indices] Indices out of range of vertex UVs."
-          });
-          return;
-        }
-      }
-    }
-    this._indices = narrowIndexArray(indices);
-    this.version++;
-    this.lastUpdateFlags = SCENE_GEOMETRY_UPDATE_INDICES;
-    this.model.scene.events.onSceneGeometryUpdated.dispatch(this.model.scene, this);
-  }
-  /**
-   * Gets or sets octahedral-encoded vertex normals.
-   *
-   * Assigning this property is a fixed-count dynamic update. The replacement
-   * array must have the same length as the existing normal array and the parent
-   * {@link SceneModel} must use `updateMode: "dynamic"`. On success xeokit
-   * bumps {@link SceneGeometry.version} and dispatches
-   * {@link SceneEvents.onSceneGeometryUpdated}; renderers can then refresh
-   * their normal buffers or textures without rebuilding the mesh.
-   *
-   * This does not recalculate normals from positions or indices. Fluid and
-   * surface simulations that need smooth dynamic lighting should update this
-   * alongside {@link SceneGeometry.positionsCompressed}.
-   */
-  set normalsCompressed(normalsCompressed) {
-    if (this.destroyed) {
-      this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: "[SceneGeometry.normalsCompressed] SceneGeometry already destroyed"
-      });
-      return;
-    }
-    if (this.model.updateMode !== "dynamic") {
-      this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: '[SceneGeometry.normalsCompressed] The parent SceneModel must use updateMode: "dynamic".'
-      });
-      return;
-    }
-    if (!this._normalsCompressed) {
-      this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: "[SceneGeometry.normalsCompressed] Cannot assign normals to geometry that was created without normals."
-      });
-      return;
-    }
-    if (!normalsCompressed) {
-      this.model.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneGeometry.normalsCompressed] Missing required value."
-      });
-      return;
-    }
-    if (normalsCompressed.length !== this._normalsCompressed.length) {
-      this.model.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneGeometry.normalsCompressed] Expected ${this._normalsCompressed.length} normal components, got ${normalsCompressed.length}.`
-      });
-      return;
-    }
-    if (normalsCompressed.length % 2 !== 0) {
-      this.model.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneGeometry.normalsCompressed] Length must be a multiple of 2."
-      });
-      return;
-    }
-    if (normalsCompressed.length / 2 !== this._positionsCompressed.length / 3) {
-      this.model.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneGeometry.normalsCompressed] Normal count must match vertex count."
-      });
-      return;
-    }
-    this._normalsCompressed = normalsCompressed;
-    this.version++;
-    this.lastUpdateFlags = SCENE_GEOMETRY_UPDATE_NORMALS_COMPRESSED;
-    this.model.scene.events.onSceneGeometryUpdated.dispatch(this.model.scene, this);
-  }
-  /**
-   * Gets this SceneGeometry as SceneGeometryCompressedParams.
-   */
-  toParams() {
-    if (this.destroyed) {
-      return this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: "[SceneGeometry.toParams] SceneGeometry already destroyed"
-      });
-    }
-    const params = {
-      id: this.id,
-      primitive: this.primitive,
-      aabb: Array.from(this.aabb),
-      positionsCompressed: Array.from(this.positionsCompressed)
-    };
-    if (this.positionsCompressed) {
-      params.positionsCompressed = Array.from(this.positionsCompressed);
-    }
-    if (this.uvsCompressed) {
-      params.uvsCompressed = Array.from(this.uvsCompressed);
-    }
-    if (this.texCoordsCompressed) {
-      params.texCoordsCompressed = {};
-      for (const key of Object.keys(this.texCoordsCompressed)) {
-        const channel = Number(key);
-        params.texCoordsCompressed[channel] = Array.from(this.texCoordsCompressed[channel]);
-      }
-    }
-    if (this.colorsCompressed) {
-      params.colorsCompressed = Array.from(this.colorsCompressed);
-    }
-    if (this.normalsCompressed) {
-      params.normalsCompressed = Array.from(this.normalsCompressed);
-    }
-    if (this.indices) {
-      params.indices = Array.from(this.indices);
-    }
-    if (this.edgeIndices) {
-      params.edgeIndices = Array.from(this.edgeIndices);
-    }
-    if (this.scales) {
-      params.scales = Array.from(this.scales);
-    }
-    if (this.rotations) {
-      params.rotations = Array.from(this.rotations);
-    }
-    if (this.framesCompressed) {
-      params.framesCompressed = this.framesCompressed.map((frame) => {
-        const frameParams = {
-          ...frame.time !== void 0 ? { time: frame.time } : {},
-          ...frame.id !== void 0 ? { id: frame.id } : {},
-          ...frame.name !== void 0 ? { name: frame.name } : {},
-          aabb: Array.from(frame.aabb),
-          positionsCompressed: Array.from(frame.positionsCompressed)
-        };
-        if (frame.normalsCompressed) {
-          frameParams.normalsCompressed = Array.from(frame.normalsCompressed);
-        }
-        if (frame.uvsCompressed) {
-          frameParams.uvsCompressed = Array.from(frame.uvsCompressed);
-        }
-        return frameParams;
-      });
-    }
-    if (this.vertexStatesCompressed) {
-      params.vertexStatesCompressed = this.vertexStatesCompressed.map((state) => {
-        const stateParams = {
-          ...state.id !== void 0 ? { id: state.id } : {},
-          ...state.name !== void 0 ? { name: state.name } : {},
-          ...state.time !== void 0 ? { time: state.time } : {},
-          aabb: Array.from(state.aabb),
-          positionsCompressed: Array.from(state.positionsCompressed)
-        };
-        if (state.normalsCompressed) {
-          stateParams.normalsCompressed = Array.from(state.normalsCompressed);
-        }
-        if (state.uvsCompressed) {
-          stateParams.uvsCompressed = Array.from(state.uvsCompressed);
-        }
-        return stateParams;
-      });
-    }
-    if (this.morphTargets) {
-      params.morphTargets = this.morphTargets.map((target) => ({
-        ...target.id !== void 0 ? { id: target.id } : {},
-        ...target.name !== void 0 ? { name: target.name } : {},
-        ...target.positions !== void 0 ? { positions: Array.from(target.positions) } : {},
-        ...target.normals !== void 0 ? { normals: Array.from(target.normals) } : {},
-        ...target.uvs !== void 0 ? { uvs: Array.from(target.uvs) } : {}
-      }));
-    }
-    return {
-      ok: true,
-      value: params
-    };
-  }
-  /**
-   * Destroys this SceneGeometry.
-   */
-  destroy() {
-    if (this.destroyed) {
-      return this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: "[SceneGeometry.destroy] SceneGeometry already destroyed"
-      });
-    }
-    if (this.numMeshes > 0) {
-      return this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: `[SceneGeometry.destroy] Cannot destroy SceneGeometry ${this.id} - SceneGeometry is currently used by at least one SceneMesh, which you need to destroy first`
-      });
-    }
-    this.model._destroyGeometry(this);
-    this.destroyed = true;
-    return {
-      ok: true,
-      value: void 0
-    };
-  }
-};
-function normalizeTexCoordsCompressed(texCoordsCompressed, uvsCompressed) {
-  const normalized = {};
-  if (texCoordsCompressed) {
-    for (const key of Object.keys(texCoordsCompressed)) {
-      const channel = Number(key);
-      if (Number.isInteger(channel) && channel >= 0 && texCoordsCompressed[channel]) {
-        normalized[channel] = texCoordsCompressed[channel];
-      }
-    }
-  }
-  if (uvsCompressed) {
-    normalized[0] = uvsCompressed;
-  }
-  return Object.keys(normalized).length > 0 ? normalized : void 0;
+function clamp01(value) {
+  return value < 0 ? 0 : value > 1 ? 1 : value;
 }
 
 // ../sdk-oct2/src/model/scene/linePattern.ts
@@ -80173,10 +78799,18 @@ var DEFAULT_MATERIAL_IOR = 1.5;
 var IDENTITY_UV_TRANSFORM = [1, 0, 0, 1, 0, 0];
 var SceneMaterial = class {
   /**
-   * The {@link model!scene.SceneModel | SceneModel} that owns this SceneMaterial.
+   * Optional document of origin. Other documents may share this resource.
    * @private
    */
   model;
+  scene;
+  /**
+   * Persistent identity, present only on an immutable library definition.
+   */
+  get externalReference() {
+    return this.scene.assets.reference(this);
+  }
+  meshes = /* @__PURE__ */ new Set();
   /**
    * The ID of this SceneMaterial within the SceneModel.
    */
@@ -80187,7 +78821,9 @@ var SceneMaterial = class {
    */
   uniqueId;
   _color;
-  /** @internal Emissive color factor (RGB, [0..1]). */
+  /**
+   * @internal Emissive color factor (RGB, [0..1]).
+   */
   _emissiveColor;
   _opacity;
   _roughness;
@@ -80305,10 +78941,11 @@ var SceneMaterial = class {
   /**
    * @private
    */
-  constructor(model, materialParams, textures) {
+  constructor(scene, materialParams, textures, model = null) {
+    this.scene = scene;
     this.model = model;
     this.id = materialParams.id;
-    this.uniqueId = `${model.id}__${this.id}`;
+    this.uniqueId = scene.assets.identity(this.id, model);
     this._color = createVec3Float32(materialParams.color || [1, 1, 1]);
     this._opacity = materialParams.opacity !== void 0 && materialParams.opacity !== null ? materialParams.opacity : 1;
     this._roughness = clamp01(
@@ -80407,8 +79044,9 @@ var SceneMaterial = class {
    * - Components are non-negative linear RGB; values above 1 represent HDR emission.
    */
   set emissiveColor(value) {
+    if (!this.scene.assets.assertMutable(this).ok) return;
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMaterial.emissiveColor] Cannot set emissiveColor on destroyed SceneMaterial ${this.id}`
@@ -80416,7 +79054,7 @@ var SceneMaterial = class {
       return;
     }
     if (!value || value.length !== 3) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: `[SceneMaterial.emissiveColor] Invalid emissiveColor for SceneMaterial ${this.id}`
@@ -80427,7 +79065,7 @@ var SceneMaterial = class {
     emissiveColor[0] = value[0];
     emissiveColor[1] = value[1];
     emissiveColor[2] = value[2];
-    this.model.scene.events.onSceneMaterialEmissiveColorChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneMaterialEmissiveColorChanged.dispatch(this.scene, this);
   }
   /**
    * Sets the RGB color for this SceneMaterial.
@@ -80436,8 +79074,9 @@ var SceneMaterial = class {
    * - Each element of the color is in range ````[0..1]````.
    */
   set color(value) {
+    if (!this.scene.assets.assertMutable(this).ok) return;
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMaterial.color] Cannot set color on destroyed SceneMaterial ${this.id}`
@@ -80445,7 +79084,7 @@ var SceneMaterial = class {
       return;
     }
     if (!value || value.length !== 3) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: `[SceneMaterial.color] Invalid color for SceneMaterial ${this.id}`
@@ -80462,7 +79101,7 @@ var SceneMaterial = class {
       color[1] = 1;
       color[2] = 1;
     }
-    this.model.scene.events.onSceneMaterialColorChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneMaterialColorChanged.dispatch(this.scene, this);
   }
   /**
    * Gets the opacity factor for this SceneMaterial.
@@ -80625,15 +79264,21 @@ var SceneMaterial = class {
   get linePattern() {
     return this._linePatternUserValue;
   }
-  /** @internal — read by downstream consumers. */
+  /**
+   * @internal — read by downstream consumers.
+   */
   get _linePatternEntries() {
     return this._linePattern.entries;
   }
-  /** @internal — read by downstream consumers. */
+  /**
+   * @internal — read by downstream consumers.
+   */
   get _linePatternLen() {
     return this._linePattern.len;
   }
-  /** @internal — read by downstream consumers. */
+  /**
+   * @internal — read by downstream consumers.
+   */
   get _linePatternPeriod() {
     return this._linePattern.period;
   }
@@ -80648,8 +79293,9 @@ var SceneMaterial = class {
    * data.
    */
   set linePattern(value) {
+    if (!this.scene.assets.assertMutable(this).ok) return;
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMaterial.linePattern] Cannot set linePattern on destroyed SceneMaterial ${this.id}`
@@ -80658,7 +79304,7 @@ var SceneMaterial = class {
     }
     this._linePatternUserValue = value;
     normaliseLinePattern(value, this._linePattern);
-    this.model.scene.events.onSceneMaterialPatternChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneMaterialPatternChanged.dispatch(this.scene, this);
   }
   /**
    * Per-material hatch pattern. Returns the originally-set
@@ -80669,19 +79315,27 @@ var SceneMaterial = class {
   get hatchPattern() {
     return this._hatchPatternUserValue;
   }
-  /** @internal — read by downstream consumers. */
+  /**
+   * @internal — read by downstream consumers.
+   */
   get _hatchPatternFamilies() {
     return this._hatchPattern.families;
   }
-  /** @internal — read by downstream consumers. */
+  /**
+   * @internal — read by downstream consumers.
+   */
   get _hatchPatternCount() {
     return this._hatchPattern.count;
   }
-  /** @internal — read by downstream consumers. */
+  /**
+   * @internal — read by downstream consumers.
+   */
   get _hatchPatternColor() {
     return this._hatchPattern.color;
   }
-  /** @internal — read by downstream consumers. `0` for screen-space, `1` for world-space. */
+  /**
+   * @internal — read by downstream consumers. `0` for screen-space, `1` for world-space.
+   */
   get _hatchPatternSpace() {
     return this._hatchPattern.space;
   }
@@ -80693,8 +79347,9 @@ var SceneMaterial = class {
    * {@link SceneEvents.onSceneMaterialPatternChanged}.
    */
   set hatchPattern(value) {
+    if (!this.scene.assets.assertMutable(this).ok) return;
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMaterial.hatchPattern] Cannot set hatchPattern on destroyed SceneMaterial ${this.id}`
@@ -80703,7 +79358,7 @@ var SceneMaterial = class {
     }
     this._hatchPatternUserValue = value;
     normaliseHatchPattern(value, this._hatchPattern);
-    this.model.scene.events.onSceneMaterialPatternChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneMaterialPatternChanged.dispatch(this.scene, this);
   }
   /**
    * Sets the opacity factor for this SceneMaterial.
@@ -80712,8 +79367,9 @@ var SceneMaterial = class {
    * - Fires an {@link SceneEvents.onSceneMaterialOpacityChanged | SceneEvents.onSceneMaterialOpacityChanged} event on the Scene.
    */
   set opacity(opacity) {
+    if (!this.scene.assets.assertMutable(this).ok) return;
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMaterial.opacity] Cannot set opacity on destroyed SceneMaterial ${this.id}`
@@ -80725,14 +79381,14 @@ var SceneMaterial = class {
       return;
     }
     this._opacity = opacity;
-    this.model.scene.events.onSceneMaterialOpacityChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneMaterialOpacityChanged.dispatch(this.scene, this);
   }
   /**
    * Gets this SceneMaterial as SceneMaterialParams.
    */
   toParams() {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMaterial.toParams] Cannot get params of destroyed SceneMaterial ${this.id}`
@@ -80764,27 +79420,40 @@ var SceneMaterial = class {
     if (this.colorTexture) {
       materialParams.colorTextureId = this.colorTexture.id;
       materialParams.colorTextureTexCoord = this._colorTextureTexCoord;
-      if (this._colorTextureUVTransform) materialParams.colorTextureUVTransform = Array.from(this._colorTextureUVTransform);
+      if (this._colorTextureUVTransform)
+        materialParams.colorTextureUVTransform = Array.from(this._colorTextureUVTransform);
     }
     if (this.metallicRoughnessTexture) {
       materialParams.metallicRoughnessTextureId = this.metallicRoughnessTexture.id;
       materialParams.metallicRoughnessTextureTexCoord = this._metallicRoughnessTextureTexCoord;
-      if (this._metallicRoughnessTextureUVTransform) materialParams.metallicRoughnessTextureUVTransform = Array.from(this._metallicRoughnessTextureUVTransform);
+      if (this._metallicRoughnessTextureUVTransform)
+        materialParams.metallicRoughnessTextureUVTransform = Array.from(
+          this._metallicRoughnessTextureUVTransform
+        );
     }
     if (this.normalsTexture) {
       materialParams.normalsTextureId = this.normalsTexture.id;
       materialParams.normalsTextureTexCoord = this._normalsTextureTexCoord;
-      if (this._normalsTextureUVTransform) materialParams.normalsTextureUVTransform = Array.from(this._normalsTextureUVTransform);
+      if (this._normalsTextureUVTransform)
+        materialParams.normalsTextureUVTransform = Array.from(
+          this._normalsTextureUVTransform
+        );
     }
     if (this.occlusionTexture) {
       materialParams.occlusionTextureId = this.occlusionTexture.id;
       materialParams.occlusionTextureTexCoord = this._occlusionTextureTexCoord;
-      if (this._occlusionTextureUVTransform) materialParams.occlusionTextureUVTransform = Array.from(this._occlusionTextureUVTransform);
+      if (this._occlusionTextureUVTransform)
+        materialParams.occlusionTextureUVTransform = Array.from(
+          this._occlusionTextureUVTransform
+        );
     }
     if (this.emissiveTexture) {
       materialParams.emissiveTextureId = this.emissiveTexture.id;
       materialParams.emissiveTextureTexCoord = this._emissiveTextureTexCoord;
-      if (this._emissiveTextureUVTransform) materialParams.emissiveTextureUVTransform = Array.from(this._emissiveTextureUVTransform);
+      if (this._emissiveTextureUVTransform)
+        materialParams.emissiveTextureUVTransform = Array.from(
+          this._emissiveTextureUVTransform
+        );
     }
     return {
       ok: true,
@@ -80798,22 +79467,30 @@ var SceneMaterial = class {
    * SceneModel still references this material — destroy or
    * reassign those meshes first. Mirrors {@link SceneGeometry.destroy}.
    */
+  /**
+   * @internal Releases creation ownership while preserving adopted resources.
+   */
+  _destroyForRollback() {
+    return this.scene.assets.rollbackCreation(this);
+  }
   destroy() {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMaterial.destroy] SceneMaterial '${this.id}' already destroyed`
       });
     }
     if (this.numMeshes > 0) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMaterial.destroy] Cannot destroy SceneMaterial '${this.id}' - still referenced by ${this.numMeshes} SceneMesh(es), which you need to destroy first`
       });
     }
-    this.model._destroyMaterial(this);
+    const allowed = this.scene.assets.canDestroy(this);
+    if (!allowed.ok) return allowed;
+    this.scene.assets.remove(this);
     this.destroyed = true;
     return { ok: true, value: void 0 };
   }
@@ -80880,6 +79557,865 @@ function normalizeBindingUVTransform(value, texture) {
 function finiteOrDefault(value, defaultValue) {
   return Number.isFinite(value) ? value : defaultValue;
 }
+
+// ../sdk-oct2/src/model/scene/SceneBehaviors.ts
+var SceneBehaviors = class {
+  constructor(scene, model = null) {
+    this.scene = scene;
+    this.model = model;
+  }
+  scene;
+  model;
+  byObject = /* @__PURE__ */ new Map();
+  byTarget = /* @__PURE__ */ new Map();
+  animationTargets = /* @__PURE__ */ new Map();
+  animationLeases = /* @__PURE__ */ new Map();
+  get animations() {
+    return this.model?.animations ?? this.scene.animations;
+  }
+  get variantSets() {
+    return this.model?.variantSets ?? this.scene.variantSets;
+  }
+  get meshes() {
+    return this.model?.meshes ?? this.scene.meshes;
+  }
+  get transforms() {
+    return this.model?.transforms ?? this.scene.transforms;
+  }
+  get materials() {
+    return this.model?.materials ?? this.scene.materials;
+  }
+  get objects() {
+    return this.model?.objects ?? this.scene.objects;
+  }
+  /**
+   * Reports live animation references before an instance or document is removed.
+   */
+  getAnimationsForTarget(target) {
+    return [...this.scene.behaviors.byTarget.get(target) ?? []];
+  }
+  retainAnimation(animation) {
+    const registry = this.scene.behaviors;
+    const targets = /* @__PURE__ */ new Set();
+    const releases = [];
+    for (const channel of animation.channels) {
+      const binding = channel.target;
+      const target = binding.type === "material" ? this.materials[binding.materialId] : binding.type === "transform" ? this.transforms[binding.transformId] : this.meshes[binding.meshId];
+      if (targets.has(target)) continue;
+      targets.add(target);
+      let animations = registry.byTarget.get(target);
+      if (!animations) registry.byTarget.set(target, animations = /* @__PURE__ */ new Set());
+      animations.add(animation);
+      if (target instanceof SceneMaterial) releases.push(this.scene.assets.retain(target));
+    }
+    registry.animationTargets.set(animation, targets);
+    registry.animationLeases.set(animation, releases);
+  }
+  releaseAnimation(animation) {
+    const registry = this.scene.behaviors;
+    for (const target of registry.animationTargets.get(animation) ?? []) {
+      const animations = registry.byTarget.get(target);
+      animations.delete(animation);
+      if (!animations.size) registry.byTarget.delete(target);
+    }
+    registry.animationTargets.delete(animation);
+    for (const release of registry.animationLeases.get(animation) ?? []) release();
+    registry.animationLeases.delete(animation);
+  }
+  _assertCanCreate(operation) {
+    if (this.scene.destroyed || this.scene._clearing)
+      return { ok: false, type: 1 /* InvalidOperation */, error: "Scene is not available" };
+    return this.model?._assertCanCreate(operation) ?? null;
+  }
+  createAnimation(animationParams) {
+    const createError = this._assertCanCreate("createAnimation");
+    if (createError) {
+      return createError;
+    }
+    const validationError = SceneAnimation.validateParams(animationParams);
+    if (validationError) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createAnimation] ${validationError}`
+      });
+    }
+    if (this.animations[animationParams.id] || this.scene.animations[this.scene.assets.identity(animationParams.id, this.model)]) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createAnimation] SceneAnimation already exists with this ID: ${animationParams.id}`
+      });
+    }
+    for (const channel of animationParams.channels) {
+      if (channel.target.type === "transform" && !Object.prototype.hasOwnProperty.call(this.transforms, channel.target.transformId)) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createAnimation] SceneTransform not found: ${channel.target.transformId}`
+        });
+      }
+      if (channel.target.type === "material") {
+        const id = channel.target.materialId;
+        if (!Object.prototype.hasOwnProperty.call(this.materials, id) || this.materials[id].destroyed) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createAnimation] SceneMaterial not found: ${id}`
+          });
+        }
+        const mutable = this.scene.assets.assertMutable(this.materials[id]);
+        if (mutable.ok === false) return mutable;
+      }
+      if (channel.target.type === "vertexState" || channel.target.type === "morphWeights") {
+        const mesh = Object.prototype.hasOwnProperty.call(this.meshes, channel.target.meshId) ? this.meshes[channel.target.meshId] : void 0;
+        let error;
+        if (!mesh || mesh.destroyed) {
+          error = `SceneMesh not found: ${channel.target.meshId}`;
+        } else if (channel.target.type === "morphWeights") {
+          const count = mesh.geometry.morphTargets?.length ?? 0;
+          if (channel.sampler.valueSize !== count) error = `Expected ${count} morph weights for mesh '${mesh.id}'.`;
+        } else {
+          const count = mesh.geometry.vertexStatesCompressed?.length ?? 0;
+          if (Array.from(channel.sampler.values).some((index) => index >= count)) {
+            error = `Vertex-state samples must reference mesh '${mesh.id}' geometry states.`;
+          }
+        }
+        if (error)
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createAnimation] ${error}`
+          });
+      }
+    }
+    const animation = new SceneAnimation(this.scene, animationParams, this.model);
+    this.animations[animation.id] = animation;
+    this.scene.animations[animation.uniqueId] = animation;
+    this.retainAnimation(animation);
+    this.model?.activeBatch?.animations.push(animation);
+    this.scene.events.onSceneAnimationCreated.dispatch(this.scene, animation);
+    return { ok: true, value: animation };
+  }
+  _destroyAnimation(animation) {
+    if (this.model?.destroyed) {
+      throw new SDKInternalException(`Cannot destroy SceneAnimation ${animation.id} - SceneModel already destroyed`);
+    }
+    if (!this.animations[animation.id]) {
+      throw new SDKInternalException(
+        `Cannot destroy SceneAnimation ${animation.id} - SceneAnimation not found in SceneModel`
+      );
+    }
+    delete this.animations[animation.id];
+    delete this.scene.animations[animation.uniqueId];
+    this.releaseAnimation(animation);
+    this.scene.events.onSceneAnimationDestroyed.dispatch(this.scene, animation);
+  }
+  createVariantSet(variantSetParams) {
+    const createError = this._assertCanCreate("createVariantSet");
+    if (createError) {
+      return createError;
+    }
+    const validation = this._validateVariantSetParams(variantSetParams);
+    if (validation) {
+      return validation;
+    }
+    const variantSet = new SceneVariantSet(this.scene, variantSetParams, this.model);
+    this.variantSets[variantSet.id] = variantSet;
+    this.scene.variantSets[variantSet.uniqueId] = variantSet;
+    this.model?.activeBatch?.variantSets.push(variantSet);
+    this._indexVariantSet(variantSet);
+    this.scene.events.onSceneVariantSetCreated.dispatch(this.model, variantSet);
+    return {
+      ok: true,
+      value: variantSet
+    };
+  }
+  getVariantSetsForObject(objectId) {
+    return Array.from(this.scene.behaviors.byObject.get(objectId) ?? []);
+  }
+  _destroyVariantSet(variantSet) {
+    if (this.model?.destroyed) {
+      throw new SDKInternalException(
+        `Cannot destroy SceneVariantSet '${variantSet.id}' - SceneModel already destroyed`
+      );
+    }
+    if (!this.variantSets[variantSet.id]) {
+      throw new SDKInternalException(
+        `Cannot destroy SceneVariantSet '${variantSet.id}' - SceneVariantSet not found in SceneModel`
+      );
+    }
+    this._unindexVariantSet(variantSet);
+    delete this.variantSets[variantSet.id];
+    delete this.scene.variantSets[variantSet.uniqueId];
+    this.scene.events.onSceneVariantSetDestroyed.dispatch(this.model, variantSet);
+  }
+  _validateVariantSetParams(variantSetParams) {
+    if (!variantSetParams) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createVariantSet] Missing required 'variantSetParams'."
+      });
+    }
+    if (!variantSetParams.id) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createVariantSet] Missing required 'id'."
+      });
+    }
+    if (this.variantSets[variantSetParams.id] || this.scene.variantSets[this.scene.assets.identity(variantSetParams.id, this.model)]) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createVariantSet] SceneVariantSet already exists with this ID: '${variantSetParams.id}'`
+      });
+    }
+    if (!variantSetParams.defaultVariantId) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createVariantSet] Missing required 'defaultVariantId'."
+      });
+    }
+    if (!Array.isArray(variantSetParams.variants) || variantSetParams.variants.length === 0) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createVariantSet] Expected at least one variant."
+      });
+    }
+    const selection = variantSetParams.selection;
+    if (selection) {
+      if (selection.strategy !== "projectedSize") {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createVariantSet] Unsupported selection strategy: '${selection.strategy}'`
+        });
+      }
+      if (selection.hysteresisPixels !== void 0 && (!Number.isFinite(selection.hysteresisPixels) || selection.hysteresisPixels < 0)) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneModel.createVariantSet] selection.hysteresisPixels must be a finite non-negative number."
+        });
+      }
+    }
+    const variantIds = /* @__PURE__ */ new Set();
+    for (let i = 0, len = variantSetParams.variants.length; i < len; i++) {
+      const variant = variantSetParams.variants[i];
+      const result = this._validateVariantParams(
+        variantSetParams.id,
+        variant,
+        variantIds,
+        variant.id === variantSetParams.defaultVariantId
+      );
+      if (result) {
+        return result;
+      }
+    }
+    if (!variantIds.has(variantSetParams.defaultVariantId)) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createVariantSet] defaultVariantId '${variantSetParams.defaultVariantId}' does not reference a variant in SceneVariantSet '${variantSetParams.id}'.`
+      });
+    }
+    return null;
+  }
+  _validateVariantParams(variantSetId, variantParams, variantIds, isDefaultVariant) {
+    if (!variantParams || !variantParams.id) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createVariantSet] Variant in SceneVariantSet '${variantSetId}' is missing required 'id'.`
+      });
+    }
+    if (variantIds.has(variantParams.id)) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createVariantSet] Duplicate variant ID '${variantParams.id}' in SceneVariantSet '${variantSetId}'.`
+      });
+    }
+    variantIds.add(variantParams.id);
+    if (!Array.isArray(variantParams.objectIds)) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createVariantSet] Variant '${variantParams.id}' in SceneVariantSet '${variantSetId}' must provide SceneObject IDs.`
+      });
+    }
+    if (isDefaultVariant && variantParams.objectIds.length === 0) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createVariantSet] Default variant '${variantParams.id}' in SceneVariantSet '${variantSetId}' must reference at least one SceneObject.`
+      });
+    }
+    const objectIds = /* @__PURE__ */ new Set();
+    for (let i = 0, len = variantParams.objectIds.length; i < len; i++) {
+      const objectId = variantParams.objectIds[i];
+      if (!objectId) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createVariantSet] Variant '${variantParams.id}' in SceneVariantSet '${variantSetId}' has an empty SceneObject ID.`
+        });
+      }
+      if (objectIds.has(objectId)) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createVariantSet] Variant '${variantParams.id}' in SceneVariantSet '${variantSetId}' references SceneObject '${objectId}' more than once.`
+        });
+      }
+      objectIds.add(objectId);
+      if (!this.objects[objectId]) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createVariantSet] SceneObject not found: '${objectId}'`
+        });
+      }
+    }
+    const range = variantParams.range;
+    if (range) {
+      const minPixels = range.minPixels;
+      const maxPixels = range.maxPixels;
+      if (minPixels !== void 0 && (!Number.isFinite(minPixels) || minPixels < 0)) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createVariantSet] Variant '${variantParams.id}' range.minPixels must be a finite non-negative number.`
+        });
+      }
+      if (maxPixels !== void 0 && (!Number.isFinite(maxPixels) || maxPixels < 0)) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createVariantSet] Variant '${variantParams.id}' range.maxPixels must be a finite non-negative number.`
+        });
+      }
+      if (minPixels !== void 0 && maxPixels !== void 0 && minPixels > maxPixels) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createVariantSet] Variant '${variantParams.id}' has contradictory projected-size range.`
+        });
+      }
+    }
+    return null;
+  }
+  _indexVariantSet(variantSet) {
+    for (const variantId in variantSet.variants) {
+      const variant = variantSet.variants[variantId];
+      for (let i = 0, len = variant.objectIds.length; i < len; i++) {
+        const objectId = variant.objectIds[i];
+        let variantSets = this.scene.behaviors.byObject.get(objectId);
+        if (!variantSets) {
+          variantSets = /* @__PURE__ */ new Set();
+          this.scene.behaviors.byObject.set(objectId, variantSets);
+        }
+        variantSets.add(variantSet);
+      }
+    }
+  }
+  _unindexVariantSet(variantSet) {
+    for (const variantId in variantSet.variants) {
+      const variant = variantSet.variants[variantId];
+      for (let i = 0, len = variant.objectIds.length; i < len; i++) {
+        const objectId = variant.objectIds[i];
+        const variantSets = this.scene.behaviors.byObject.get(objectId);
+        if (!variantSets) {
+          continue;
+        }
+        variantSets.delete(variantSet);
+        if (variantSets.size === 0) {
+          this.scene.behaviors.byObject.delete(objectId);
+        }
+      }
+    }
+  }
+};
+
+// ../sdk-oct2/src/model/scene/representation/validateDataResourceParams.ts
+function validateDataResourceParams(params) {
+  if (typeof params.id !== "string" || !params.id) throw new Error("Resource id is required");
+  if (params.kind === "buffer") {
+    const Type = { float32: Float32Array, uint32: Uint32Array, uint8: Uint8Array }[params.componentType];
+    if (!Type || !(params.data instanceof Type))
+      throw new Error("Resource componentType does not match its typed array");
+  } else if (params.kind === "texture2d") {
+    const channels = { r32float: 1, rg32float: 2, rgba32float: 4, rgba8unorm: 4 }[params.format];
+    const Type = params.format === "rgba8unorm" ? Uint8Array : Float32Array;
+    if (!channels || !Number.isSafeInteger(params.width) || !Number.isSafeInteger(params.height) || params.width < 1 || params.height < 1 || !(params.data instanceof Type) || params.data.length !== params.width * params.height * channels)
+      throw new Error("Invalid numerical texture shape or data type");
+  } else throw new Error("Unsupported scene data resource kind");
+}
+
+// ../sdk-oct2/src/model/scene/representation/copyDataResourceParams.ts
+function copyDataResourceParams(params) {
+  validateDataResourceParams(params);
+  return { ...params, data: params.data.slice() };
+}
+
+// ../sdk-oct2/src/model/scene/representation/SceneDataResource.ts
+var SceneDataResource = class {
+  /**
+   * @internal Construct through SceneModel.createDataResource.
+   */
+  constructor(scene, params, model = null) {
+    this.scene = scene;
+    this.model = model;
+    this.uniqueId = scene.assets.identity(params.id, model);
+    this.params = copyDataResourceParams(params);
+  }
+  scene;
+  model;
+  uniqueId;
+  params;
+  _revision = 0;
+  /**
+   * Whether the owning model has removed this resource. Do not set directly.
+   */
+  destroyed = false;
+  /**
+   * Stable ID within model.dataResources.
+   */
+  get id() {
+    return this.params.id;
+  }
+  /**
+   * CPU layout discriminator, independent of any GPU representation.
+   */
+  get kind() {
+    return this.params.kind;
+  }
+  /**
+   * Starts at zero; increments only after a successful replacement.
+   */
+  get revision() {
+    return this._revision;
+  }
+  /**
+   * Borrowed CPU storage, readonly by contract; typed arrays cannot be deeply frozen.
+   * Never mutate this array or its underlying buffer. Use model.updateDataResource
+   * to validate replacements and notify consumers. Use toParams for a writable copy.
+   */
+  get data() {
+    return this.params.data;
+  }
+  /**
+   * A new metadata object describing layout without copying the numerical payload.
+   */
+  get descriptor() {
+    const { data, ...descriptor } = this.params;
+    return descriptor;
+  }
+  /**
+   * @returns A portable descriptor and an independent, writable copy of its typed array.
+   */
+  toParams() {
+    return copyDataResourceParams(this.params);
+  }
+  /**
+   * @internal Transfers an already copied, validated replacement from the model.
+   */
+  _replaceFrom(resource) {
+    this.params = resource.params;
+    this._revision++;
+  }
+  /**
+   * @internal Removes only this transaction-owned instance, preserving unresolved references.
+   */
+  _destroyForRollback() {
+    return (this.model ?? this.scene)._rollbackDataResource(this);
+  }
+  /**
+   * @returns Success, or InvalidOperation while any representation still references this resource.
+   */
+  destroy() {
+    if (this.destroyed || (this.model ?? this.scene).dataResources[this.id] !== this) {
+      return {
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "[SceneDataResource.destroy] Component already destroyed"
+      };
+    }
+    return (this.model ?? this.scene).destroyDataResource(this.id);
+  }
+};
+
+// ../sdk-oct2/src/model/scene/representation/copyRepresentationParams.ts
+var ownedJson = /* @__PURE__ */ new WeakSet();
+function copyJson(value, ancestors = /* @__PURE__ */ new Set()) {
+  if (value === null || typeof value === "string" || typeof value === "boolean")
+    return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "object" || ancestors.has(value))
+    throw new Error("Representation parameters must be finite, acyclic JSON");
+  if (ownedJson.has(value)) return value;
+  ancestors.add(value);
+  let result;
+  if (Array.isArray(value)) {
+    const array = new Array(value.length);
+    for (let i = 0; i < array.length; i++) {
+      if (i in value) array[i] = copyJson(value[i], ancestors);
+    }
+    result = Object.freeze(array);
+  } else {
+    if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
+      throw new Error("Representation parameters must contain only plain JSON objects");
+    }
+    const object = /* @__PURE__ */ Object.create(null);
+    for (const [key, item] of Object.entries(value)) object[key] = copyJson(item, ancestors);
+    result = Object.freeze(object);
+  }
+  ancestors.delete(value);
+  ownedJson.add(result);
+  return result;
+}
+function copyRepresentationParams(params) {
+  if (typeof params.id !== "string" || !params.id || typeof params.type !== "string" || !params.type || !Number.isSafeInteger(params.schemaVersion) || params.schemaVersion < 1) {
+    throw new Error("Representation requires id, type and a positive schemaVersion");
+  }
+  const b2 = params.localBounds;
+  if (!b2 || b2.length !== 6 || !b2.every(Number.isFinite) || b2[0] > b2[3] || b2[1] > b2[4] || b2[2] > b2[5]) {
+    throw new Error("Representation localBounds must be a finite ordered AABB");
+  }
+  if (!params.parameters || Array.isArray(params.parameters) || typeof params.parameters !== "object") {
+    throw new Error("Representation parameters must be a JSON object");
+  }
+  const resources = /* @__PURE__ */ Object.create(null);
+  if (!params.resources || typeof params.resources !== "object" || Array.isArray(params.resources))
+    throw new Error("Expected resource references");
+  for (const [name14, id] of Object.entries(params.resources)) {
+    if (!name14 || typeof id !== "string" || !id) throw new Error("Invalid representation resource reference");
+    resources[name14] = id;
+  }
+  const fallback = params.fallback ?? "bounds";
+  if (!["bounds", "hidden", "standard"].includes(fallback))
+    throw new Error("Invalid representation fallback");
+  return Object.freeze({
+    id: params.id,
+    type: params.type,
+    schemaVersion: params.schemaVersion,
+    parameters: copyJson(params.parameters),
+    resources: Object.freeze(resources),
+    localBounds: Object.freeze([...b2]),
+    fallback
+  });
+}
+
+// ../sdk-oct2/src/model/scene/representation/SceneRepresentation.ts
+var SceneRepresentation = class {
+  /**
+   * @internal Construct through SceneModel.createRepresentation.
+   */
+  constructor(scene, params, model = null) {
+    this.scene = scene;
+    this.model = model;
+    this.uniqueId = scene.assets.identity(params.id, model);
+    this.params = copyRepresentationParams(params);
+  }
+  scene;
+  model;
+  uniqueId;
+  params;
+  _revision = 0;
+  /**
+   * Whether the owning model has removed this definition. Do not set directly.
+   */
+  destroyed = false;
+  /**
+   * Stable identifier within model.representations.
+   */
+  get id() {
+    return this.params.id;
+  }
+  /**
+   * Application-owned type matched by schemas and renderer plugins.
+   */
+  get type() {
+    return this.params.type;
+  }
+  /**
+   * Version of the semantic parameter/resource schema.
+   */
+  get schemaVersion() {
+    return this.params.schemaVersion;
+  }
+  /**
+   * Deeply frozen parameters. Replace through SceneModel.updateRepresentation.
+   */
+  get parameters() {
+    return this.params.parameters;
+  }
+  /**
+   * Frozen semantic input names mapped to resource IDs in this model.
+   */
+  get resources() {
+    return this.params.resources;
+  }
+  /**
+   * Frozen authored local AABB, independent of camera and renderer visibility.
+   */
+  get localBounds() {
+    return this.params.localBounds;
+  }
+  /**
+   * Authored fallback intent, resolved to bounds when omitted at creation.
+   */
+  get fallback() {
+    return this.params.fallback;
+  }
+  /**
+   * Starts at zero and increments after each successful model-mediated update.
+   */
+  get revision() {
+    return this._revision;
+  }
+  /**
+   * Returns a portable definition with no executable state.
+   *
+   * @returns A new outer object whose nested values are immutable and safely shared.
+   */
+  toParams() {
+    return { ...this.params };
+  }
+  /**
+   * @internal Called by the owning model only after atomic validation.
+   */
+  _replace(params) {
+    this.params = params;
+    this._revision++;
+  }
+  /**
+   * @internal Removes only this transaction-owned instance, preserving unresolved references.
+   */
+  _destroyForRollback() {
+    return (this.model ?? this.scene)._rollbackRepresentation(this);
+  }
+  /**
+   * Removes this definition through its owning model.
+   *
+   * @returns Success, or InvalidOperation when a mesh still binds this definition.
+   */
+  destroy() {
+    if (this.destroyed || (this.model ?? this.scene).representations[this.id] !== this) {
+      return {
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "[SceneRepresentation.destroy] Component already destroyed"
+      };
+    }
+    return (this.model ?? this.scene).destroyRepresentation(this.id);
+  }
+};
+
+// ../sdk-oct2/src/model/scene/SceneDefinitions.ts
+var SceneDefinitions = class {
+  constructor(scene, model = null) {
+    this.scene = scene;
+    this.model = model;
+  }
+  scene;
+  model;
+  get dataResources() {
+    return this.model?.dataResources ?? this.scene.dataResources;
+  }
+  get representations() {
+    return this.model?.representations ?? this.scene.representations;
+  }
+  get meshes() {
+    return this.model?.meshes ?? this.scene.meshes;
+  }
+  assertCanCreate(operation) {
+    if (this.scene.destroyed || this.scene._clearing)
+      return { ok: false, type: 1 /* InvalidOperation */, error: "Scene is not available" };
+    return this.model?._assertCanCreate(operation) ?? null;
+  }
+  /**
+   * Copies and registers a numerical payload in this model.
+   *
+   * @param params Buffer or 2D table with a unique model-local ID and matching typed array.
+   * @returns The model-owned resource, or InvalidInput without publishing partial data.
+   */
+  createDataResource(params) {
+    const blocked = this.assertCanCreate("createDataResource");
+    if (blocked) return blocked;
+    try {
+      if (this.dataResources[params.id] || this.scene.dataResources[this.scene.assets.identity(params.id, this.model)])
+        throw new Error(`Resource already exists: ${params.id}`);
+      const resource = new SceneDataResource(this.scene, params, this.model);
+      for (const representation of Object.values(this.representations)) {
+        if (Object.values(representation.resources).includes(resource.id)) {
+          this._checkRepresentation(representation.toParams(), resource);
+        }
+      }
+      this.dataResources[resource.id] = resource;
+      this.scene.dataResources[resource.uniqueId] = resource;
+      this.model?.activeBatch?.dataResources.push(resource);
+      this.scene.events.onSceneDataResourceChanged.dispatch(this.scene, this.model);
+      return { ok: true, value: resource };
+    } catch (error) {
+      return { ok: false, type: 2 /* InvalidInput */, error: String(error) };
+    }
+  }
+  /**
+   * Atomically replaces values while preserving resource identity and layout.
+   * Known referring schemas validate the replacement before revision/event updates.
+   *
+   * @param id Existing resource ID in this model.
+   * @param update Complete replacement typed array; copied, with layout unchanged.
+   * @returns Success, or a validation/missing-resource error with the old values intact.
+   */
+  updateDataResource(id, update) {
+    const resource = this.dataResources[id];
+    if (this.scene.destroyed || this.model?.destroyed || !resource)
+      return { ok: false, type: 2 /* InvalidInput */, error: `Resource not found: ${id}` };
+    try {
+      const candidate = new SceneDataResource(
+        this.scene,
+        { ...resource.descriptor, data: update.data },
+        this.model
+      );
+      for (const representation of Object.values(this.representations)) {
+        if (Object.values(representation.resources).includes(id))
+          this._checkRepresentation(representation.toParams(), candidate);
+      }
+      resource._replaceFrom(candidate);
+      this.scene.events.onSceneDataResourceChanged.dispatch(this.scene, this.model);
+      return { ok: true, value: void 0 };
+    } catch (error) {
+      return { ok: false, type: 2 /* InvalidInput */, error: String(error) };
+    }
+  }
+  /**
+   * Removes an unreferenced numerical resource and notifies consumers.
+   * @param id Model-local resource ID.
+   * @returns InvalidOperation if missing or still referenced by any representation.
+   */
+  destroyDataResource(id) {
+    const resource = this.dataResources[id];
+    if (!resource || Object.values(this.representations).some((rep) => Object.values(rep.resources).includes(id))) {
+      return { ok: false, type: 1 /* InvalidOperation */, error: `Resource missing or still referenced: ${id}` };
+    }
+    delete this.dataResources[id];
+    delete this.scene.dataResources[resource.uniqueId];
+    resource.destroyed = true;
+    this.scene.events.onSceneDataResourceChanged.dispatch(this.scene, this.model);
+    return { ok: true, value: void 0 };
+  }
+  /**
+   * Creates a renderer-independent interpretation of scene data.
+   *
+   * Always validates/copies portable structure. Known schemas registered on
+   * scene.representationSchemas additionally validate resolved semantic inputs.
+   * Unknown types, newer schemas and unresolved resource IDs remain preservable.
+   *
+   * @param params Unique ID, semantic type/version, finite JSON, bounds and resource references.
+   * @returns The model-owned definition, or an error without publishing it.
+   */
+  createRepresentation(params) {
+    const blocked = this.assertCanCreate("createRepresentation");
+    if (blocked) return blocked;
+    try {
+      if (this.representations[params.id] || this.scene.representations[this.scene.assets.identity(params.id, this.model)])
+        throw new Error(`Representation already exists: ${params.id}`);
+      const representation = new SceneRepresentation(this.scene, params, this.model);
+      this._checkRepresentation(representation.toParams());
+      this.representations[representation.id] = representation;
+      this.scene.representations[representation.uniqueId] = representation;
+      this.model?.activeBatch?.representations.push(representation);
+      this._representationChanged(representation.id);
+      return { ok: true, value: representation };
+    } catch (error) {
+      return { ok: false, type: 2 /* InvalidInput */, error: String(error) };
+    }
+  }
+  /**
+   * Validates and replaces definition fields atomically, then increments revision.
+   *
+   * @param id Existing model-local definition ID; identity cannot change.
+   * @param update Fields to replace. Parameters/resources are replaced as whole maps, not deep-merged.
+   * @returns Success, or a validation error leaving the previous definition unchanged.
+   */
+  updateRepresentation(id, update) {
+    const representation = this.representations[id];
+    if (this.scene.destroyed || this.model?.destroyed || !representation)
+      return { ok: false, type: 2 /* InvalidInput */, error: `Representation not found: ${id}` };
+    try {
+      const params = copyRepresentationParams({ ...representation.toParams(), ...update, id });
+      this._checkRepresentation(params);
+      representation._replace(params);
+      this._representationChanged(id);
+      return { ok: true, value: void 0 };
+    } catch (error) {
+      return { ok: false, type: 2 /* InvalidInput */, error: String(error) };
+    }
+  }
+  /**
+   * Removes a definition when no mesh in this model still binds it.
+   * @param id Model-local definition ID.
+   * @returns Success, or InvalidOperation when missing or still bound.
+   */
+  destroyRepresentation(id) {
+    const representation = this.representations[id];
+    if (!representation || Object.values(this.meshes).some((mesh) => mesh.representationId === id)) {
+      return { ok: false, type: 1 /* InvalidOperation */, error: `Representation missing or still bound: ${id}` };
+    }
+    delete this.representations[id];
+    delete this.scene.representations[representation.uniqueId];
+    representation.destroyed = true;
+    this._representationChanged(id);
+    return { ok: true, value: void 0 };
+  }
+  /**
+   * Restores forward references to their unresolved state when construction is rolled back. @internal
+   */
+  _rollbackDataResource(component) {
+    if (component.destroyed) return { ok: true, value: void 0 };
+    if (this.dataResources[component.id] !== component) {
+      return { ok: false, type: 1 /* InvalidOperation */, error: "Rollback component identity changed" };
+    }
+    delete this.dataResources[component.id];
+    delete this.scene.dataResources[component.uniqueId];
+    component.destroyed = true;
+    this.scene.events.onSceneDataResourceChanged.dispatch(this.scene, this.model);
+    return { ok: true, value: void 0 };
+  }
+  /**
+   * Restores forward references to their unresolved state when construction is rolled back. @internal
+   */
+  _rollbackRepresentation(component) {
+    if (component.destroyed) return { ok: true, value: void 0 };
+    if (this.representations[component.id] !== component) {
+      return { ok: false, type: 1 /* InvalidOperation */, error: "Rollback component identity changed" };
+    }
+    delete this.representations[component.id];
+    delete this.scene.representations[component.uniqueId];
+    component.destroyed = true;
+    this._representationChanged(component.id);
+    return { ok: true, value: void 0 };
+  }
+  _checkRepresentation(params, replacement) {
+    const resources = /* @__PURE__ */ Object.create(null);
+    for (const [name14, id] of Object.entries(params.resources))
+      resources[name14] = replacement?.id === id ? replacement : this.dataResources[id];
+    if (Object.values(resources).some((resource) => !resource)) return;
+    const result = this.scene.representationSchemas.validate({ representation: params, resources });
+    if (result.status === "invalid")
+      throw new Error(result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; "));
+  }
+  _representationChanged(id) {
+    for (const mesh of Object.values(this.meshes)) if (mesh.representationId === id) mesh.setWorldMatrixDirty();
+    this.scene.events.onSceneRepresentationChanged.dispatch(this.scene, this.model);
+  }
+};
 
 // ../sdk-oct2/src/model/scene/CoordinateSystem.ts
 var CoordinateSystem = class {
@@ -81254,8 +80790,550 @@ function unitScale(unit2) {
   }
 }
 
+// ../sdk-oct2/src/model/scene/SceneFrame.ts
+var SceneFrame = class {
+  constructor(source, destination) {
+    this.source = source;
+    this.destination = destination;
+  }
+  source;
+  destination;
+  _matrix = createMat4Float64();
+  dirty = true;
+  get matrix() {
+    if (this.dirty) {
+      createCoordinateSystemTransform(this.source, this.destination, this._matrix);
+      this.dirty = false;
+    }
+    return this._matrix;
+  }
+  invalidate() {
+    this.dirty = true;
+  }
+};
+
+// ../sdk-oct2/src/model/scene/SceneSource.ts
+function componentSource(source, document2, id) {
+  return source ? Object.freeze({ ...source }) : document2 ? Object.freeze({ ...document2, componentId: id }) : void 0;
+}
+
+// ../sdk-oct2/src/model/scene/internal/exportLocalMatrix.ts
+function exportLocalMatrix(instance, document2 = instance.model) {
+  if (instance.parentTransform || !document2 || instance.frame === document2.rootFrame) return instance.matrix;
+  return mulMat4(
+    inverseMat4(document2.coordinateSystemMatrix, createMat4Float64()),
+    instance.worldMatrix,
+    createMat4Float64()
+  );
+}
+
+// ../sdk-oct2/src/model/scene/SceneLight.ts
+var SceneLight = class _SceneLight {
+  id;
+  uniqueId;
+  scene;
+  model;
+  destroyed = false;
+  /**
+   * @internal Referencing domains protect this resource from premature disposal.
+   */
+  _domains = /* @__PURE__ */ new Set();
+  /**
+   * @internal Deferred stream cleanup after the final domain releases this light.
+   */
+  _onUnused;
+  _params;
+  _parent = null;
+  /**
+   * @internal Construct with Scene.createLight or SceneModel.createLight.
+   */
+  constructor(scene, model, params) {
+    this.id = params.id;
+    this.scene = scene;
+    this.model = model;
+    this.uniqueId = JSON.stringify([model?.id ?? null, this.id]);
+    this._params = this._copy(params);
+    this._attach();
+  }
+  /**
+   * @internal Validates complete input before changing any state.
+   */
+  static validate(model, p, scene) {
+    if (!p || typeof p.id !== "string" || !p.id || !["directional", "point", "spot"].includes(p.type))
+      return "A light requires an ID and directional, point or spot type";
+    for (const key of ["color", "position", "direction"]) {
+      const v = p[key];
+      if (v !== void 0 && (!v || v.length !== 3 || !Array.from(v).every(Number.isFinite)))
+        return `Invalid light ${key}`;
+    }
+    if (p.color?.some((v) => v < 0) || p.direction && Math.hypot(...p.direction) === 0)
+      return "Light color must be nonnegative and direction nonzero";
+    if (p.intensity !== void 0 && (!Number.isFinite(p.intensity) || p.intensity < 0))
+      return "Light intensity must be finite and nonnegative";
+    if (p.range !== void 0 && (!Number.isFinite(p.range) || p.range <= 0))
+      return "Light range must be finite and positive";
+    const inner = p.innerConeAngle ?? 0, outer = p.outerConeAngle ?? Math.PI / 4;
+    if (!Number.isFinite(inner) || !Number.isFinite(outer) || inner < 0 || inner >= outer || outer > Math.PI / 2)
+      return "Spot angles require 0 <= inner < outer <= PI/2";
+    if (p.active !== void 0 && typeof p.active !== "boolean") return "Light active must be boolean";
+    const transforms = model?.transforms ?? scene?.transforms;
+    if (p.parentTransformId !== void 0 && (!transforms || !Object.prototype.hasOwnProperty.call(transforms, p.parentTransformId) || transforms[p.parentTransformId].destroyed))
+      return "Light parent transform not found";
+    return null;
+  }
+  get type() {
+    return this._params.type;
+  }
+  get color() {
+    return [...this._params.color];
+  }
+  set color(value) {
+    this.fromParams({ ...this._params, color: value });
+  }
+  get intensity() {
+    return this._params.intensity;
+  }
+  set intensity(value) {
+    this.fromParams({ ...this._params, intensity: value });
+  }
+  get active() {
+    return this._params.active;
+  }
+  set active(value) {
+    this.fromParams({ ...this._params, active: value });
+  }
+  get position() {
+    return [...this._params.position];
+  }
+  set position(value) {
+    this.fromParams({ ...this._params, position: value });
+  }
+  get direction() {
+    return [...this._params.direction];
+  }
+  set direction(value) {
+    this.fromParams({ ...this._params, direction: value });
+  }
+  get range() {
+    return this._params.range;
+  }
+  set range(value) {
+    this.fromParams({ ...this._params, range: value });
+  }
+  get innerConeAngle() {
+    return this._params.innerConeAngle;
+  }
+  get outerConeAngle() {
+    return this._params.outerConeAngle;
+  }
+  get parentTransform() {
+    return this._parent;
+  }
+  /**
+   * Atomically replaces the light definition. ID and ownership are immutable.
+   */
+  fromParams(params) {
+    const error = this.destroyed || this.scene.destroyed || this.scene._clearing ? "Light or scene is destroyed" : params?.id !== this.id ? "Light ID cannot change" : _SceneLight.validate(this.model, params, this.scene);
+    if (error) return this._error(error);
+    const next2 = this._copy(params);
+    if (JSON.stringify(next2) === JSON.stringify(this._params)) return { ok: true, value: void 0 };
+    this._parent?._lights?.delete(this);
+    this._params = next2;
+    this._attach();
+    this.scene._lightingChanged();
+    return { ok: true, value: void 0 };
+  }
+  toParams() {
+    return this.destroyed ? this._error("Light is destroyed") : { ok: true, value: this._copy(this._params) };
+  }
+  /**
+   * @internal Resolves world position and direction in double precision.
+   */
+  _world() {
+    const m = this._parent?.worldMatrix ?? this.model?.coordinateSystemMatrix;
+    const p = this._params.position, d = this._params.direction;
+    const position = Array.from(p), direction = Array.from(d);
+    if (m)
+      for (let i = 0; i < 3; i++) {
+        position[i] = m[i] * p[0] + m[i + 4] * p[1] + m[i + 8] * p[2] + m[i + 12];
+        direction[i] = m[i] * d[0] + m[i + 4] * d[1] + m[i + 8] * d[2];
+      }
+    const length2 = Math.hypot(...direction);
+    return { position, direction: direction.map((v) => length2 > 0 ? v / length2 : 0) };
+  }
+  /**
+   * Fails while a domain references the light. Detach it before removing its model.
+   */
+  destroy() {
+    if (this.destroyed || this._domains.size)
+      return this._error("Light is destroyed or still referenced by a lighting domain");
+    this._parent?._lights?.delete(this);
+    this._parent = null;
+    if (this.model) delete this.model.lights[this.id];
+    delete this.scene.lights[this.uniqueId];
+    this.destroyed = true;
+    this._onUnused = void 0;
+    this.scene._lightingChanged();
+    return { ok: true, value: void 0 };
+  }
+  _attach() {
+    this._parent = this._params.parentTransformId ? (this.model?.transforms ?? this.scene.transforms)[this._params.parentTransformId] : null;
+    if (this._parent) (this._parent._lights ??= /* @__PURE__ */ new Set()).add(this);
+  }
+  _copy(p) {
+    return {
+      ...p,
+      color: Array.from(p.color ?? [1, 1, 1]),
+      intensity: p.intensity ?? 1,
+      position: Array.from(p.position ?? [0, 0, 0]),
+      direction: Array.from(p.direction ?? [0, 0, -1]),
+      innerConeAngle: p.innerConeAngle ?? 0,
+      outerConeAngle: p.outerConeAngle ?? Math.PI / 4,
+      active: p.active !== false
+    };
+  }
+  _error(error) {
+    return this.scene.logError({ ok: false, type: 2 /* InvalidInput */, error: `[SceneLight] ${error}` });
+  }
+};
+
+// ../sdk-oct2/src/model/scene/LightingDomain.ts
+var LightingDomain = class _LightingDomain {
+  id;
+  scene;
+  destroyed = false;
+  /**
+   * @internal Compact renderer selector; never serialized into model assets.
+   */
+  _slot;
+  /**
+   * @internal Explicit mesh bindings and model defaults protect shared lifetime.
+   */
+  _meshes = /* @__PURE__ */ new Set();
+  /**
+   * @internal Models inheriting this domain, including models with no meshes yet.
+   */
+  _models = /* @__PURE__ */ new Set();
+  _lights = [];
+  _ambient;
+  _environment;
+  _environmentIntensity;
+  /**
+   * @internal Construct through Scene.createLightingDomain.
+   */
+  constructor(scene, params, slot) {
+    this.scene = scene;
+    this.id = params.id;
+    this._slot = slot;
+    this._ambient = Array.from(params.ambient ?? [0, 0, 0]);
+    this._environment = params.environment ?? "none";
+    this._environmentIntensity = params.environmentIntensity ?? 1;
+    this._lights = [...new Set(params.lights ?? [])];
+    for (const light of this._lights) light._domains.add(this);
+  }
+  /**
+   * @internal Rejects foreign, destroyed and uncommitted light resources.
+   */
+  static validate(scene, p) {
+    if (!p || typeof p.id !== "string" || !p.id) return "A lighting domain requires a nonempty ID";
+    if (p.ambient !== void 0 && (!p.ambient || p.ambient.length !== 3 || !Array.from(p.ambient).every((v) => Number.isFinite(v) && v >= 0))) return "Ambient radiance must be finite and nonnegative";
+    if (p.environment !== void 0 && p.environment !== "none" && p.environment !== "view") return "Environment must be none or view";
+    if (p.environmentIntensity !== void 0 && (!Number.isFinite(p.environmentIntensity) || p.environmentIntensity < 0)) return "Environment intensity must be finite and nonnegative";
+    if (p.lights !== void 0 && !Array.isArray(p.lights)) return "Lights must be an array";
+    for (const light of p.lights ?? []) if (!(light instanceof SceneLight) || light.destroyed || light.scene !== scene || scene.lights[light.uniqueId] !== light || light.model && !light.model._canShareLight(light)) return "Light is foreign, destroyed or unpublished";
+    return null;
+  }
+  get lights() {
+    return this._lights.slice();
+  }
+  get ambient() {
+    return Array.from(this._ambient);
+  }
+  set ambient(value) {
+    this.fromParams({ ...this._params(), ambient: value });
+  }
+  get environment() {
+    return this._environment;
+  }
+  set environment(value) {
+    this.fromParams({ ...this._params(), environment: value });
+  }
+  get environmentIntensity() {
+    return this._environmentIntensity;
+  }
+  set environmentIntensity(value) {
+    this.fromParams({ ...this._params(), environmentIntensity: value });
+  }
+  setLights(lights) {
+    return this.fromParams({ ...this._params(), lights });
+  }
+  /**
+   * Atomically updates shared lighting; membership and GPU geometry stay intact.
+   */
+  fromParams(p) {
+    const error = this.destroyed || this.scene.destroyed || this.scene._clearing ? "Domain or scene is destroyed" : p?.id !== this.id ? "Domain ID cannot change" : _LightingDomain.validate(this.scene, p);
+    if (error) return this._error(error);
+    const previous = this._lights;
+    for (const light of previous) light._domains.delete(this);
+    this._lights = [...new Set(p.lights ?? [])];
+    for (const light of this._lights) light._domains.add(this);
+    this._ambient = Array.from(p.ambient ?? [0, 0, 0]);
+    this._environment = p.environment ?? "none";
+    this._environmentIntensity = p.environmentIntensity ?? 1;
+    for (const light of previous) if (!light._domains.size) light._onUnused?.();
+    this.scene._lightingChanged();
+    return { ok: true, value: void 0 };
+  }
+  /**
+   * Fails while any mesh or model references the domain. Removing a member
+   * model alone never destroys a shared domain or its light resources.
+   */
+  destroy() {
+    if (this.destroyed || this._meshes.size || this._models.size) return this._error("Domain is destroyed or still referenced");
+    const previous = this._lights;
+    for (const light of previous) light._domains.delete(this);
+    this._lights = [];
+    delete this.scene.lightingDomains[this.id];
+    this.destroyed = true;
+    for (const light of previous) if (!light._domains.size) light._onUnused?.();
+    this.scene._lightingChanged();
+    return { ok: true, value: void 0 };
+  }
+  _params() {
+    return { id: this.id, lights: this._lights, ambient: this._ambient, environment: this._environment, environmentIntensity: this._environmentIntensity };
+  }
+  _error(error) {
+    return this.scene.logError({ ok: false, type: 2 /* InvalidInput */, error: `[LightingDomain] ${error}` });
+  }
+};
+
+// ../sdk-oct2/src/model/scene/SceneClipBox.ts
+var IDENTITY_MATRIX = new Float64Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+var SceneClipBox = class _SceneClipBox {
+  id;
+  /**
+   * Collision-free key in Scene.clipBoxes. Owner-local IDs may be reused.
+   */
+  uniqueId;
+  scene;
+  /**
+   * Owning model, or null for an application-managed, scene-owned box.
+   */
+  model;
+  destroyed = false;
+  /**
+   * @internal Prevents acquiring new references during owner destruction.
+   */
+  _retiring = false;
+  /**
+   * @internal Mesh references keep this resource alive during streaming.
+   */
+  _meshes = /* @__PURE__ */ new Set();
+  /**
+   * @internal Deferred stream cleanup after the final mesh releases this box.
+   */
+  _onUnused;
+  _aabb;
+  _active;
+  _parent;
+  _matrix;
+  /**
+   * @internal Construct through Scene.createClipBox or SceneModel.createClipBox.
+   */
+  constructor(scene, model, params) {
+    this.id = params.id;
+    this.uniqueId = _SceneClipBox.key(model, params.id);
+    this.scene = scene;
+    this.model = model;
+    this._aabb = Array.from(params.aabb);
+    this._active = params.active !== false;
+    this._matrix = createMat4Float64(params.matrix ?? IDENTITY_MATRIX);
+    this._parent = params.parentTransformId ? (model?.transforms ?? scene.transforms)[params.parentTransformId] : null;
+    if (this._parent) (this._parent._clipBoxes ??= /* @__PURE__ */ new Set()).add(this);
+  }
+  /**
+   * @internal Validate before publishing any state.
+   */
+  static validate(model, params, scene) {
+    if (!params || typeof params.id !== "string" || !params.id) return "A clip box requires a nonempty ID";
+    const b2 = params.aabb;
+    if (!b2 || b2.length !== 6 || !Array.from(b2).every(Number.isFinite) || b2[0] >= b2[3] || b2[1] >= b2[4] || b2[2] >= b2[5])
+      return "Clip box bounds must have finite, positive extents";
+    if (params.active !== void 0 && typeof params.active !== "boolean") return "Clip box active must be boolean";
+    if (model && params.matrix !== void 0) return "Model-owned clip boxes use parentTransformId, not matrix";
+    if (!model && params.parentTransformId !== void 0 && params.matrix !== void 0)
+      return "Use a parent transform or a matrix for a scene clip box";
+    if (params.matrix !== void 0) {
+      const m = params.matrix;
+      if (!m || m.length !== 16 || !Array.from(m).every(Number.isFinite) || m[3] !== 0 || m[7] !== 0 || m[11] !== 0 || m[15] !== 1)
+        return "Clip box matrix must be finite and affine";
+    }
+    const transforms = model?.transforms ?? scene?.transforms;
+    if (params.parentTransformId !== void 0 && (!transforms || !Object.prototype.hasOwnProperty.call(transforms, params.parentTransformId) || transforms[params.parentTransformId].destroyed)) {
+      return `Clip box parent transform not found: ${params.parentTransformId}`;
+    }
+    return null;
+  }
+  /**
+   * @internal Namespaced registry key; JSON tuples preserve arbitrary owner IDs.
+   */
+  static key(model, id) {
+    return JSON.stringify([model?.id ?? null, id]);
+  }
+  get aabb() {
+    return Array.from(this._aabb);
+  }
+  set aabb(value) {
+    this.fromParams({ ...this._params(), aabb: value });
+  }
+  get active() {
+    return this._active;
+  }
+  set active(value) {
+    this.fromParams({ ...this._params(), active: value });
+  }
+  get parentTransform() {
+    return this._parent;
+  }
+  /**
+   * Snapshot of the box-local-to-scene frame. Assigning updates a scene-owned
+   * box; model-owned frames must be changed through their transform hierarchy.
+   */
+  get matrix() {
+    return createMat4Float64(this.worldMatrix);
+  }
+  set matrix(value) {
+    this.fromParams({ ...this._params(), matrix: value });
+  }
+  /**
+   * Box-local to scene-world transform. Treat the returned matrix as read-only.
+   */
+  get worldMatrix() {
+    return this._parent?.worldMatrix ?? this.model?.coordinateSystemMatrix ?? this._matrix;
+  }
+  /**
+   * Reattaches the box without changing its local bounds.
+   */
+  setParentTransform(id) {
+    return this.fromParams({ ...this._params(), matrix: void 0, parentTransformId: id ?? void 0 });
+  }
+  /**
+   * Atomically replaces bounds, activation and the owner's frame definition.
+   * The resource ID and owner are immutable; omitted matrix means identity.
+   */
+  fromParams(params) {
+    if (this.destroyed || this._retiring || this.scene.destroyed || this.scene._clearing)
+      return this._error("Clip box or scene is being destroyed");
+    const error = !params || params.id !== this.id ? "Clip box ID cannot change" : _SceneClipBox.validate(this.model, params, this.scene);
+    if (error) return this._error(error);
+    const matrix = params.matrix ?? IDENTITY_MATRIX;
+    if ((params.parentTransformId ?? null) === (this._parent?.id ?? null) && params.active !== false === this._active && Array.from(params.aabb).every((value, index) => value === this._aabb[index]) && (this.model || Array.from(matrix).every((value, index) => value === this._matrix[index]))) {
+      return { ok: true, value: void 0 };
+    }
+    this._parent?._clipBoxes?.delete(this);
+    this._parent = params.parentTransformId ? (this.model?.transforms ?? this.scene.transforms)[params.parentTransformId] : null;
+    if (this._parent) (this._parent._clipBoxes ??= /* @__PURE__ */ new Set()).add(this);
+    this._aabb = Array.from(params.aabb);
+    this._active = params.active !== false;
+    if (!this.model) this._matrix = createMat4Float64(matrix);
+    this._changed();
+    return { ok: true, value: void 0 };
+  }
+  toParams() {
+    return this.destroyed ? this._error("Clip box is destroyed") : { ok: true, value: this._params() };
+  }
+  /**
+   * Fails while any mesh references this resource, including an inactive box.
+   */
+  destroy() {
+    if (this.destroyed || this._meshes.size) return this._error("Clip box is destroyed or still referenced by meshes");
+    this._parent?._clipBoxes?.delete(this);
+    this._parent = null;
+    if (this.model) delete this.model.clipBoxes[this.id];
+    delete this.scene.clipBoxes[this.uniqueId];
+    this.destroyed = true;
+    this._onUnused = void 0;
+    this.scene.events.onSceneClipBoxDestroyed.dispatch(this.scene, this);
+    return { ok: true, value: void 0 };
+  }
+  /**
+   * @internal Releases a dependency, including references from other models.
+   */
+  _releaseMesh(mesh) {
+    this._meshes.delete(mesh);
+    if (!this._meshes.size && !this.destroyed) this._onUnused?.();
+  }
+  /**
+   * @internal Emits only metadata changes; geometry and morph buffers are untouched.
+   */
+  _changed() {
+    const scene = this.scene;
+    scene.clipBoxVersion++;
+    scene.events.onSceneClipBoxChanged.dispatch(scene, this);
+    for (const mesh of this._meshes) scene.events.onSceneMeshClipBoxChanged.dispatch(scene, mesh);
+  }
+  /**
+   * @internal Three row vectors mapping coordinates relative to origin to [-1,1].
+   * Compose in Float64 before upload to preserve RTC precision. Inactive boxes
+   * map to zero; a singular frame maps outside the box (fail closed).
+   */
+  _relativeRows(origin2, target = new Float32Array(12)) {
+    target.fill(0);
+    if (!this._active) return target;
+    const m = createMat4Float64(this.worldMatrix);
+    m[12] -= origin2[0];
+    m[13] -= origin2[1];
+    m[14] -= origin2[2];
+    const d = m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) + m[8] * (m[1] * m[6] - m[5] * m[2]);
+    if (!Number.isFinite(d) || d === 0) {
+      target[3] = 2;
+      return target;
+    }
+    inverseMat4(m, m);
+    for (let row = 0; row < 3; row++) {
+      const size = this._aabb[row + 3] - this._aabb[row];
+      for (let col = 0; col < 4; col++) target[row * 4 + col] = m[col * 4 + row] * (2 / size);
+      target[row * 4 + 3] -= (this._aabb[row] + this._aabb[row + 3]) / size;
+    }
+    if (!target.every(Number.isFinite)) {
+      target.fill(0);
+      target[3] = 2;
+    }
+    return target;
+  }
+  /**
+   * Tests a scene-world surface point; boundaries are retained.
+   */
+  containsWorldPoint(point) {
+    if (!this._active) return true;
+    const rows = this._relativeRows(point);
+    return Math.abs(rows[3]) <= 1 && Math.abs(rows[7]) <= 1 && Math.abs(rows[11]) <= 1;
+  }
+  _params() {
+    return {
+      id: this.id,
+      aabb: this.aabb,
+      active: this._active,
+      ...this.model || this._parent ? { parentTransformId: this.model ? this._parent?.id : this._parent?.uniqueId } : { matrix: Array.from(this._matrix) }
+    };
+  }
+  _error(error) {
+    return this.scene.logError({ ok: false, type: 2 /* InvalidInput */, error: `[SceneClipBox] ${error}` });
+  }
+};
+
 // ../sdk-oct2/src/model/scene/SceneTransform.ts
 var SceneTransform = class {
+  source;
+  get model() {
+    return this._model;
+  }
+  /**
+   * @internal Membership changes go through Scene.moveToModel.
+   */
+  _setDocument(model) {
+    this._model = model;
+  }
   /**
    * @internal Volumes attached directly to this frame.
    */
@@ -81264,19 +81342,35 @@ var SceneTransform = class {
    * @internal Authored lights attached to this transform.
    */
   _lights;
-  /** Unique identifier for this transform within the {@link model!scene.SceneModel | SceneModel}. */
+  /**
+   * Unique identifier for this transform within the {@link model!scene.SceneModel | SceneModel}.
+   */
   id;
-  /** The global ID of this SceneTransform, unique among all SceneTransforms within the Scene, **/
+  /**
+   * The global ID of this SceneTransform, unique among all SceneTransforms within the Scene, *
+   */
   uniqueId;
-  /** The {@link model!scene.SceneModel | SceneModel} this transform belongs to. */
-  model;
-  /** Local scale vector (XYZ). Defaults to `[1, 1, 1]`. */
+  /**
+   * The {@link model!scene.SceneModel | SceneModel} this transform belongs to.
+   */
+  _model;
+  scene;
+  frame;
+  /**
+   * Local scale vector (XYZ). Defaults to `[1, 1, 1]`.
+   */
   _scale = createVec3Float64([1, 1, 1]);
-  /** Local Euler rotation in degrees (XYZ order). Kept in sync with {@link _quaternion}. */
+  /**
+   * Local Euler rotation in degrees (XYZ order). Kept in sync with {@link _quaternion}.
+   */
   _rotation = createVec3Float64([0, 0, 0]);
-  /** Local position (XYZ). Defaults to `[0, 0, 0]`. */
+  /**
+   * Local position (XYZ). Defaults to `[0, 0, 0]`.
+   */
   _position = createVec3Float64([0, 0, 0]);
-  /** Local orientation quaternion. Kept in sync with {@link _rotation}. */
+  /**
+   * Local orientation quaternion. Kept in sync with {@link _rotation}.
+   */
   _quaternion = createQuatFloat64();
   /**
    * Local transformation matrix (TRS) relative to {@link parentTransform}.
@@ -81295,18 +81389,26 @@ var SceneTransform = class {
    * @private
    */
   _worldMatrix;
-  /** True when {@link _localMatrix} needs rebuilding from TRS. */
+  /**
+   * True when {@link _localMatrix} needs rebuilding from TRS.
+   */
   _localMatrixDirty = false;
-  /** True when {@link _worldMatrix} needs rebuilding. */
+  /**
+   * True when {@link _worldMatrix} needs rebuilding.
+   */
   _worldMatrixDirty = true;
   /**
    * Child meshes directly parented to this transform.
    * @private
    */
   _childMeshes = [];
-  /** Child transforms directly parented to this transform. */
+  /**
+   * Child transforms directly parented to this transform.
+   */
   _childTransforms = [];
-  /** Parent transform, or `null` when this transform is a root. */
+  /**
+   * Parent transform, or `null` when this transform is a root.
+   */
   _parentTransform = null;
   /**
    * True once {@link destroy} has been called.
@@ -81319,10 +81421,13 @@ var SceneTransform = class {
    * into TRS (keeping Euler/quaternion consistent). Otherwise, TRS components are applied.
    * @private
    */
-  constructor(model, transformParams) {
+  constructor(scene, transformParams, model = null) {
     this.id = transformParams.id;
-    this.uniqueId = `${model.id}__${this.id}`;
-    this.model = model;
+    this.source = componentSource(transformParams.source, model?.source, transformParams.id);
+    this.uniqueId = scene.assets.identity(this.id, model);
+    this._model = model;
+    this.scene = scene;
+    this.frame = model?.rootFrame ?? scene.rootFrame;
     this._localMatrix = transformParams.matrix ? createMat4Float64(transformParams.matrix) : identityMat4();
     this._worldMatrix = createMat4Float64();
     if (transformParams.matrix) {
@@ -81340,10 +81445,12 @@ var SceneTransform = class {
   // ------------------------------------------------------------------------------------------------
   // Local TRS
   // ------------------------------------------------------------------------------------------------
-  /** Sets the local scale (XYZ). */
+  /**
+   * Sets the local scale (XYZ).
+   */
   set scale(scale3) {
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.scale] Cannot set scale on destroyed SceneTransform ${this.id}`
@@ -81353,14 +81460,18 @@ var SceneTransform = class {
     this._scale.set(scale3 ?? [1, 1, 1]);
     this._setLocalDirty();
   }
-  /** Gets the local scale (XYZ). */
+  /**
+   * Gets the local scale (XYZ).
+   */
   get scale() {
     return this._scale;
   }
-  /** Sets the local rotation as Euler angles in degrees (XYZ order). */
+  /**
+   * Sets the local rotation as Euler angles in degrees (XYZ order).
+   */
   set rotation(rotation) {
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.rotation] Cannot set rotation on destroyed SceneTransform ${this.id}`
@@ -81371,14 +81482,18 @@ var SceneTransform = class {
     eulerToQuat(this._rotation, "XYZ", this._quaternion);
     this._setLocalDirty();
   }
-  /** Gets the local rotation as Euler angles in degrees (XYZ order). */
+  /**
+   * Gets the local rotation as Euler angles in degrees (XYZ order).
+   */
   get rotation() {
     return this._rotation;
   }
-  /** Sets the local rotation as a quaternion. */
+  /**
+   * Sets the local rotation as a quaternion.
+   */
   set quaternion(quaternion) {
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.quaternion] Cannot set quaternion on destroyed SceneTransform ${this.id}`
@@ -81389,14 +81504,18 @@ var SceneTransform = class {
     quatToEuler(this._quaternion, "XYZ", this._rotation);
     this._setLocalDirty();
   }
-  /** Gets the local rotation quaternion. */
+  /**
+   * Gets the local rotation quaternion.
+   */
   get quaternion() {
     return this._quaternion;
   }
-  /** Sets the local position (XYZ). */
+  /**
+   * Sets the local position (XYZ).
+   */
   set position(position) {
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.position] Cannot set position on destroyed SceneTransform ${this.id}`
@@ -81406,7 +81525,9 @@ var SceneTransform = class {
     this._position.set(position ?? [0, 0, 0]);
     this._setLocalDirty();
   }
-  /** Gets the local position (XYZ). */
+  /**
+   * Gets the local position (XYZ).
+   */
   get position() {
     return this._position;
   }
@@ -81417,7 +81538,7 @@ var SceneTransform = class {
    */
   set matrix(matrix) {
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.matrix] Cannot set matrix on destroyed SceneTransform ${this.id}`
@@ -81434,26 +81555,25 @@ var SceneTransform = class {
     this._localMatrixDirty = false;
     this.setWorldMatrixDirty();
   }
-  /** Gets the local transformation matrix. */
+  /**
+   * Gets the local transformation matrix.
+   */
   get matrix() {
     if (this._localMatrixDirty) {
-      composeMat4(
-        this._position,
-        this._quaternion,
-        this._scale,
-        this._localMatrix
-      );
+      composeMat4(this._position, this._quaternion, this._scale, this._localMatrix);
       this._localMatrixDirty = false;
     }
     return this._localMatrix;
   }
-  /** Gets the global transformation matrix. */
+  /**
+   * Gets the global transformation matrix.
+   */
   get worldMatrix() {
     if (this._worldMatrixDirty) {
       if (this._parentTransform) {
         mulMat4(this._parentTransform.worldMatrix, this.matrix, this._worldMatrix);
       } else {
-        mulMat4(this.model.coordinateSystemMatrix, this.matrix, this._worldMatrix);
+        mulMat4(this.frame.matrix, this.matrix, this._worldMatrix);
       }
       this._worldMatrixDirty = false;
     }
@@ -81462,15 +81582,21 @@ var SceneTransform = class {
   // ------------------------------------------------------------------------------------------------
   // Hierarchy
   // ------------------------------------------------------------------------------------------------
-  /** Gets the parent transform, or `null` when this transform is a root. */
+  /**
+   * Gets the parent transform, or `null` when this transform is a root.
+   */
   get parentTransform() {
     return this._parentTransform;
   }
-  /** Gets direct child transforms of this transform. */
+  /**
+   * Gets direct child transforms of this transform.
+   */
   get childTransforms() {
     return this._childTransforms;
   }
-  /** Gets direct child meshes of this transform. */
+  /**
+   * Gets direct child meshes of this transform.
+   */
   get childMeshes() {
     return this._childMeshes;
   }
@@ -81480,7 +81606,7 @@ var SceneTransform = class {
    */
   setWorldMatrixDirty() {
     this._worldMatrixDirty = true;
-    if (this._lights?.size) this.model.scene._lightingChanged();
+    if (this._lights?.size) this.scene._lightingChanged();
     if (this._clipBoxes) for (const box of this._clipBoxes) box._changed();
     for (const child of this._childTransforms) {
       child.setWorldMatrixDirty();
@@ -81516,62 +81642,51 @@ var SceneTransform = class {
    * @param opts.preserveWorld - When `true`, keeps the world transform unchanged.
    */
   setParentTransformId(parentTransformId, opts) {
-    if (this.destroyed) {
-      return this.model.scene.logError({
+    const parent = parentTransformId ? (this.model?.transforms ?? this.scene.transforms)[parentTransformId] : null;
+    if (parentTransformId && !parent) {
+      return this.scene.logError({
         ok: false,
-        type: 1 /* InvalidOperation */,
-        error: `[SceneTransform.setParentTransformId] Cannot set parent transform on destroyed SceneTransform ${this.id}`
+        type: 2 /* InvalidInput */,
+        error: `Parent transform '${parentTransformId}' is not bound in this scope`
       });
     }
-    let parentTransform = null;
-    if (parentTransformId) {
-      if (parentTransformId === this.id) {
-        return this.model.scene.logError({
-          ok: false,
-          type: 1 /* InvalidOperation */,
-          error: `[SceneTransform.setParentTransformId] Cannot set parent transform to self on SceneTransform ${this.id}`
-        });
-      }
-      parentTransform = this.model.transforms[parentTransformId];
-      if (!parentTransform) {
-        return this.model.scene.logError({
-          ok: false,
-          type: 1 /* InvalidOperation */,
-          error: `[SceneTransform.setParentTransformId] SceneTransform "${parentTransformId}" not found in SceneModel`
-        });
-      }
-      if (parentTransform.model.id !== this.model.id) {
-        return this.model.scene.logError({
-          ok: false,
-          type: 1 /* InvalidOperation */,
-          error: `[SceneTransform.setParentTransformId] Cannot set parent transform to a transform in a different SceneModel on SceneTransform ${this.id}`
-        });
-      }
-      for (let ancestor = parentTransform; ancestor; ancestor = ancestor._parentTransform) {
-        if (ancestor === this) {
-          return this.model.scene.logError({
-            ok: false,
-            type: 1 /* InvalidOperation */,
-            error: `[SceneTransform.setParentTransformId] Cannot create a transform hierarchy cycle on SceneTransform ${this.id}`
-          });
-        }
-      }
+    return this.setParentTransform(parent, opts);
+  }
+  /**
+   * Parents this instance to any transform in the same scene. Document membership
+   * stays unchanged. A failed world-preserving reparent leaves all state intact.
+   */
+  setParentTransform(parent, opts) {
+    if (this.destroyed || parent && (parent.destroyed || parent.scene !== this.scene)) {
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "Invalid parent transform or destroyed instance"
+      });
     }
-    const preserve = !!opts?.preserveWorld;
-    if (preserve) {
-      const currentWorld = createMat4Float64(this.worldMatrix);
-      this._attachParentTransform(parentTransform);
-      if (this._parentTransform) {
-        const invParent = inverseMat4(this._parentTransform.worldMatrix, createMat4Float64());
-        mulMat4(invParent, currentWorld, this._localMatrix);
-      } else {
-        const invCoordSystem = inverseMat4(this.model.coordinateSystemMatrix, createMat4Float64());
-        mulMat4(invCoordSystem, currentWorld, this._localMatrix);
-      }
-      this.matrix = this._localMatrix;
-    } else {
-      this._attachParentTransform(parentTransform);
+    for (let ancestor = parent; ancestor; ancestor = ancestor.parentTransform) {
+      if (ancestor === this)
+        return this.scene.logError({
+          ok: false,
+          type: 1 /* InvalidOperation */,
+          error: "Transform parentage would create a cycle"
+        });
     }
+    let local;
+    if (opts?.preserveWorld) {
+      const basis = parent?.worldMatrix ?? this.frame.matrix;
+      const determinant3 = determinantMat4(basis);
+      if (!Number.isFinite(determinant3) || determinant3 === 0) {
+        return this.scene.logError({
+          ok: false,
+          type: 1 /* InvalidOperation */,
+          error: "Cannot preserve placement under a singular transform"
+        });
+      }
+      local = mulMat4(inverseMat4(basis, createMat4Float64()), this.worldMatrix, createMat4Float64());
+    }
+    this._attachParentTransform(parent);
+    if (local) this.matrix = local;
     return { ok: true, value: void 0 };
   }
   /**
@@ -81585,21 +81700,21 @@ var SceneTransform = class {
    */
   addChildTransform(childTransformId, opts) {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.addChildTransform] Cannot add child transform to destroyed SceneTransform ${this.id}`
       });
     }
-    const child = this.model.transforms[childTransformId];
+    const child = (this.model?.transforms ?? this.scene.transforms)[childTransformId];
     if (!child) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.addChildTransform] Transform "${childTransformId}" not found in SceneModel`
       });
     }
-    return child.setParentTransformId(this.id, opts);
+    return child.setParentTransform(this, opts);
   }
   /**
    * Removes a child transform from this transform by ID (if it is currently parented here).
@@ -81610,15 +81725,15 @@ var SceneTransform = class {
    */
   removeChildTransform(childTransformId) {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.removeChildTransform] Cannot remove child transform from destroyed SceneTransform ${this.id}`
       });
     }
-    const child = this.model.transforms[childTransformId];
+    const child = (this.model?.transforms ?? this.scene.transforms)[childTransformId];
     if (!child) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.removeChildTransform] Transform "${childTransformId}" not found in SceneModel`
@@ -81640,21 +81755,21 @@ var SceneTransform = class {
    */
   addChildMesh(childMeshId) {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.addChildMesh] Cannot add child mesh to destroyed SceneTransform ${this.id}`
       });
     }
-    const child = this.model.meshes[childMeshId];
+    const child = (this.model?.meshes ?? this.scene.meshes)[childMeshId];
     if (!child) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.addChildMesh] Mesh "${childMeshId}" not found in SceneModel`
       });
     }
-    child.setParentTransformId(this.id);
+    child.setParentTransform(this);
     return { ok: true, value: void 0 };
   }
   /**
@@ -81664,16 +81779,16 @@ var SceneTransform = class {
    */
   removeChildMesh(childMeshId) {
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.removeChildMesh] Cannot remove child mesh from destroyed SceneTransform ${this.id}`
       });
       return;
     }
-    const child = this.model.meshes[childMeshId];
+    const child = (this.model?.meshes ?? this.scene.meshes)[childMeshId];
     if (!child) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.removeChildMesh] Mesh "${childMeshId}" not found in SceneModel`
@@ -81694,7 +81809,7 @@ var SceneTransform = class {
       this._parentTransform._updateGlobal(force);
       mulMat4(this._parentTransform._worldMatrix, this._localMatrix, this._worldMatrix);
     } else {
-      mulMat4(this.model.coordinateSystemMatrix, this._localMatrix, this._worldMatrix);
+      mulMat4(this.frame.matrix, this._localMatrix, this._worldMatrix);
     }
     this._worldMatrixDirty = false;
     for (const child of this._childTransforms) {
@@ -81708,14 +81823,14 @@ var SceneTransform = class {
    */
   toParams() {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.toParams] Cannot serialize destroyed SceneTransform ${this.id}`
       });
     }
-    const transformParams = { id: this.id };
-    transformParams.matrix = Array.from(this.matrix);
+    const transformParams = { id: this.id, source: this.source };
+    transformParams.matrix = Array.from(exportLocalMatrix(this));
     if (this._parentTransform) {
       transformParams.parentTransformId = this._parentTransform.id;
     }
@@ -81729,21 +81844,33 @@ var SceneTransform = class {
    * - Removes itself from the owning {@link model!scene.SceneModel | SceneModel}
    */
   destroy() {
-    if (this._lights?.size) return this.model.scene.logError({ ok: false, type: 1 /* InvalidOperation */, error: "Cannot destroy transform while lights reference it" });
-    if (this._clipBoxes?.size) return this.model.scene.logError({
-      ok: false,
-      type: 1 /* InvalidOperation */,
-      error: `Cannot destroy transform ${this.id} while clip boxes reference it`
-    });
+    if (this.scene.behaviors.getAnimationsForTarget(this).length)
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: `Remove animations targeting '${this.uniqueId}' before destroying it`
+      });
+    if (this._lights?.size)
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "Cannot destroy transform while lights reference it"
+      });
+    if (this._clipBoxes?.size)
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: `Cannot destroy transform ${this.id} while clip boxes reference it`
+      });
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTransform.destroy] SceneTransform ${this.id} already destroyed`
       });
     }
     if (this._parentTransform) {
-      this._parentTransform.removeChildTransform(this.id);
+      this._attachParentTransform(null);
     }
     this._parentTransform = null;
     for (const child of [...this._childTransforms]) {
@@ -81754,7 +81881,7 @@ var SceneTransform = class {
     }
     this._childTransforms = [];
     this._childMeshes = [];
-    this.model._destroyTransform(this);
+    this.scene.instances.remove(this);
     this.destroyed = true;
     return { ok: true, value: void 0 };
   }
@@ -81899,12 +82026,22 @@ function createMorphWeights(geometry, morphWeights) {
 }
 var SHARED_IDENTITY_MATRIX = identityMat4();
 var SceneMesh = class {
+  source;
+  get model() {
+    return this._model;
+  }
+  /**
+   * @internal Membership changes go through Scene.moveToModel.
+   */
+  _setDocument(model) {
+    this._model = model;
+  }
   _lightingDomain;
   /**
    * Effective shared lighting context, or null for legacy View lighting.
    */
   get lightingDomain() {
-    return this._lightingDomain === void 0 ? this.model.lightingDomain : this._lightingDomain;
+    return this._lightingDomain === void 0 ? this.model?.lightingDomain ?? null : this._lightingDomain;
   }
   /**
    * @internal Whether this mesh follows its model's default lighting domain.
@@ -81918,13 +82055,14 @@ var SceneMesh = class {
    * Updates instance metadata only, without changing geometry or materials.
    */
   setLightingDomain(domain) {
-    if (this.destroyed || domain != null && (!(domain instanceof LightingDomain) || domain.destroyed || domain.scene !== this.model.scene || this.model.scene.lightingDomains[domain.id] !== domain || this.model.scene.destroyed || this.model.scene._clearing || !this.model._canShareLightBinding())) return this.model.scene.logError({ ok: false, type: 2 /* InvalidInput */, error: "Invalid lighting domain" });
+    if (this.destroyed || domain != null && (!(domain instanceof LightingDomain) || domain.destroyed || domain.scene !== this.scene || this.scene.lightingDomains[domain.id] !== domain || this.scene.destroyed || this.scene._clearing || this.model && !this.model._canShareLightBinding()))
+      return this.scene.logError({ ok: false, type: 2 /* InvalidInput */, error: "Invalid lighting domain" });
     if (domain === this._lightingDomain) return { ok: true, value: void 0 };
     this._lightingDomain?._meshes.delete(this);
     this._lightingDomain = domain;
     domain?._meshes.add(this);
-    this.model.scene.events.onSceneMeshLightingChanged.dispatch(this.model.scene, this);
-    this.model.scene._lightingChanged();
+    this.scene.events.onSceneMeshLightingChanged.dispatch(this.scene, this);
+    this.scene._lightingChanged();
     return { ok: true, value: void 0 };
   }
   _clipBox = null;
@@ -81947,9 +82085,9 @@ var SceneMesh = class {
    * External bindings are runtime state and are omitted from model exports.
    */
   setClipBox(id) {
-    const box = typeof id === "string" ? this.model.clipBoxes[id] : id;
-    if (this.destroyed || id !== null && (!(box instanceof SceneClipBox) || box.destroyed || box._retiring || box.scene !== this.model.scene || box.scene.clipBoxes[box.uniqueId] !== box || box.model && box.model !== this.model && !box.model._canShareClipBox(box) || this.model.scene.destroyed || this.model.scene._clearing) || box && (this.representationId || this.geometry.primitive === GaussianSplatsPrimitive)) {
-      return this.model.scene.logError({
+    const box = typeof id === "string" ? (this.model?.clipBoxes ?? this.scene.clipBoxes)[id] : id;
+    if (this.destroyed || id !== null && (!(box instanceof SceneClipBox) || box.destroyed || box._retiring || box.scene !== this.scene || box.scene.clipBoxes[box.uniqueId] !== box || box.model && box.model !== this.model && !box.model._canShareClipBox(box) || this.scene.destroyed || this.scene._clearing) || box && (this.representationId || this.geometry.primitive === GaussianSplatsPrimitive)) {
+      return this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: `[SceneMesh.setClipBox] Invalid or unpublished clip box, or unsupported mesh: ${typeof id === "string" ? id : box?.id}`
@@ -81960,8 +82098,8 @@ var SceneMesh = class {
     this._clipBox = box;
     box?._meshes.add(this);
     previous?._releaseMesh(this);
-    this.model.scene.clipBoxVersion++;
-    this.model.scene.events.onSceneMeshClipBoxChanged.dispatch(this.model.scene, this);
+    this.scene.clipBoxVersion++;
+    this.scene.events.onSceneMeshClipBoxChanged.dispatch(this.scene, this);
     return { ok: true, value: void 0 };
   }
   /**
@@ -81976,9 +82114,11 @@ var SceneMesh = class {
    */
   uniqueId;
   /**
-   * The SceneModel that contains this SceneMesh.
+   * Optional document of origin; use scene for canonical ownership.
    */
-  model;
+  _model;
+  scene;
+  frame;
   /**
    * The {@link model!scene.SceneObject | SceneObject} that uses this SceneMesh.
    */
@@ -82004,26 +82144,34 @@ var SceneMesh = class {
    * The mesh, its geometry and its object keep their identities. Renderers update their bindings.
    */
   setMaterial(materialId) {
-    if (this.destroyed || this.model.destroyed || this.model.destroying) {
-      return this.model.scene.logError({
+    if (this.destroyed || this.model?.destroyed || this.model?.destroying) {
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: "[SceneMesh.setMaterial] Cannot change a destroyed mesh"
       });
     }
-    const next2 = materialId === void 0 ? void 0 : this.model.materials[materialId];
-    if (materialId !== void 0 && (!next2 || next2.destroyed)) {
-      return this.model.scene.logError({
+    const next2 = typeof materialId === "string" ? (this.model?.materials ?? this.scene.materials)[materialId] : materialId;
+    if (materialId !== void 0 && (!next2 || next2.destroyed || next2.scene !== this.scene)) {
+      return this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: `[SceneMesh.setMaterial] Material not found in this model: ${materialId}`
       });
     }
     if (next2 === this._material) return { ok: true, value: void 0 };
-    if (this._material) this._material.numMeshes--;
+    const previous = this._material;
+    if (previous) {
+      previous.numMeshes--;
+      previous.meshes.delete(this);
+    }
     this._material = next2;
-    if (next2) next2.numMeshes++;
-    this.model.scene.events.onSceneMeshMaterialChanged.dispatch(this.model.scene, this);
+    if (next2) {
+      next2.numMeshes++;
+      next2.meshes.add(this);
+    }
+    this.scene.events.onSceneMeshMaterialChanged.dispatch(this.scene, this);
+    if (previous) this.scene.assets.collect(previous);
     return { ok: true, value: void 0 };
   }
   /**
@@ -82080,21 +82228,29 @@ var SceneMesh = class {
   _representationId;
   _representationMode;
   _augmentedBounds;
-  /** Whether the binding replaces ordinary drawing or augments it. */
+  /**
+   * Whether the binding replaces ordinary drawing or augments it.
+   */
   get representationMode() {
     return this._representationMode;
   }
-  /** True only when this binding delegates ordinary drawing to a representation. */
+  /**
+   * True only when this binding delegates ordinary drawing to a representation.
+   */
   get replacesGeometry() {
     return this._representationId !== void 0 && this._representationMode === "replace";
   }
-  /** Model-local representation binding, or undefined for ordinary geometry interpretation. */
+  /**
+   * Model-local representation binding, or undefined for ordinary geometry interpretation.
+   */
   get representationId() {
     return this._representationId;
   }
-  /** Authored extent, distinct from transient renderer influence and screen coverage. */
+  /**
+   * Authored extent, distinct from transient renderer influence and screen coverage.
+   */
   get localBounds() {
-    const bounds = this.model.representations[this._representationId ?? ""]?.localBounds;
+    const bounds = (this.model?.representations ?? this.scene.representations)[this._representationId ?? ""]?.localBounds;
     const geometryBounds = getMeshGeometryBounds(this);
     if (!bounds) return geometryBounds;
     if (this._representationMode === "replace") return bounds;
@@ -82121,7 +82277,7 @@ var SceneMesh = class {
     this._representationId = id;
     this._representationMode = mode;
     this.setWorldMatrixDirty();
-    this.model.scene.events.onSceneMeshRepresentationChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneMeshRepresentationChanged.dispatch(this.scene, this);
     return { ok: true, value: void 0 };
   }
   /**
@@ -82129,8 +82285,11 @@ var SceneMesh = class {
    */
   constructor(meshParams) {
     this.id = meshParams.id;
-    this.uniqueId = `${meshParams.model.id}__${meshParams.id}`;
-    this.model = meshParams.model;
+    this.source = componentSource(meshParams.source, meshParams.model?.source, meshParams.id);
+    this.uniqueId = meshParams.scene.assets.identity(meshParams.id, meshParams.model);
+    this._model = meshParams.model;
+    this.scene = meshParams.scene;
+    this.frame = this.model?.rootFrame ?? this.scene.rootFrame;
     this._clipBox = meshParams.clipBox ?? null;
     this._clipBox?._meshes.add(this);
     this._representationId = meshParams.representationId;
@@ -82187,14 +82346,14 @@ var SceneMesh = class {
    */
   setFrameTime(frameTime) {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMesh.setFrameTime] Cannot set frameTime on destroyed SceneMesh ${this.id}`
       });
     }
     if (!Number.isFinite(frameTime)) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: `[SceneMesh.setFrameTime] Invalid frameTime for SceneMesh ${this.id}`
@@ -82204,7 +82363,7 @@ var SceneMesh = class {
       return { ok: true, value: void 0 };
     }
     this._frameTime = frameTime;
-    this.model.scene.events.onSceneMeshFrameTimeChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneMeshFrameTimeChanged.dispatch(this.scene, this);
     return { ok: true, value: void 0 };
   }
   /**
@@ -82228,7 +82387,7 @@ var SceneMesh = class {
    */
   setMorphWeights(morphWeights) {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMesh.setMorphWeights] Cannot set morph weights on destroyed SceneMesh ${this.id}`
@@ -82236,7 +82395,7 @@ var SceneMesh = class {
     }
     const error = validateMorphWeights(this.geometry, morphWeights);
     if (error) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: `[SceneMesh.setMorphWeights] ${error}`
@@ -82253,7 +82412,7 @@ var SceneMesh = class {
       return { ok: true, value: void 0 };
     }
     this._morphWeights = Array.from(morphWeights);
-    this.model.scene.events.onSceneMeshMorphWeightsChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneMeshMorphWeightsChanged.dispatch(this.scene, this);
     return { ok: true, value: void 0 };
   }
   /**
@@ -82278,7 +82437,7 @@ var SceneMesh = class {
    */
   setVertexState(stateAIndex, stateBIndex = stateAIndex, factor = 0) {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMesh.setVertexState] Cannot set vertex state on destroyed SceneMesh ${this.id}`
@@ -82286,14 +82445,14 @@ var SceneMesh = class {
     }
     const stateCount = this.geometry.vertexStatesCompressed?.length ?? 0;
     if (!Number.isInteger(stateAIndex) || !Number.isInteger(stateBIndex) || stateAIndex < 0 || stateBIndex < 0 || stateAIndex >= stateCount || stateBIndex >= stateCount) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: `[SceneMesh.setVertexState] Vertex state indices must reference geometry '${this.geometry.id}' vertexStatesCompressed.`
       });
     }
     if (!Number.isFinite(factor)) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: `[SceneMesh.setVertexState] Vertex state factor must be finite.`
@@ -82305,7 +82464,7 @@ var SceneMesh = class {
     this._vertexStateAIndex = stateAIndex;
     this._vertexStateBIndex = stateBIndex;
     this._vertexStateFactor = factor;
-    this.model.scene.events.onSceneMeshVertexStateChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneMeshVertexStateChanged.dispatch(this.scene, this);
     return { ok: true, value: void 0 };
   }
   /**
@@ -82325,7 +82484,7 @@ var SceneMesh = class {
    */
   set color(value) {
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMesh.color] Cannot set color on destroyed SceneMesh ${this.id}`
@@ -82333,7 +82492,7 @@ var SceneMesh = class {
       return;
     }
     if (!value || value.length !== 3) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: `[SceneMesh.color] Invalid color for SceneMesh ${this.id}`
@@ -82350,7 +82509,7 @@ var SceneMesh = class {
       color[1] = 1;
       color[2] = 1;
     }
-    this.model.scene.events.onSceneMeshColorChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneMeshColorChanged.dispatch(this.scene, this);
   }
   /**
    * Gets the effective RGB color for this SceneMesh, which is the color of the SceneMaterial if it has one,
@@ -82372,7 +82531,7 @@ var SceneMesh = class {
    */
   set matrix(matrix) {
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMesh.matrix] Cannot set matrix on destroyed SceneMesh ${this.id}`
@@ -82380,7 +82539,7 @@ var SceneMesh = class {
       return;
     }
     if (!matrix || matrix.length !== 16) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: `[SceneMesh.matrix] Invalid matrix for SceneMesh ${this.id}`
@@ -82413,7 +82572,7 @@ var SceneMesh = class {
    * Gets the global transform matrix for this SceneMesh.
    */
   get worldMatrix() {
-    if (!this._parentTransform && isIdentityMat4(this.model.coordinateSystemMatrix)) {
+    if (!this._parentTransform && isIdentityMat4(this.frame.matrix)) {
       return this._localMatrix;
     }
     if (this._worldMatrixDirty || !this._worldMatrix) {
@@ -82423,7 +82582,7 @@ var SceneMesh = class {
       if (this._parentTransform) {
         mulMat4(this._parentTransform.worldMatrix, this._localMatrix, this._worldMatrix);
       } else {
-        mulMat4(this.model.coordinateSystemMatrix, this._localMatrix, this._worldMatrix);
+        mulMat4(this.frame.matrix, this._localMatrix, this._worldMatrix);
       }
       this._worldMatrixDirty = false;
     }
@@ -82445,7 +82604,7 @@ var SceneMesh = class {
    */
   set opacity(opacity) {
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMesh.opacity] Cannot set opacity on destroyed SceneMesh ${this.id}`
@@ -82457,7 +82616,7 @@ var SceneMesh = class {
       return;
     }
     this._opacity = opacity;
-    this.model.scene.events.onSceneMeshOpacityChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneMeshOpacityChanged.dispatch(this.scene, this);
   }
   /**
    * Gets the effective opacity factor for this SceneMesh, which is the opacity of the material if it has one,
@@ -82713,7 +82872,7 @@ var SceneMesh = class {
    */
   setWorldMatrixDirty() {
     this._worldMatrixDirty = true;
-    this.model.scene.events.onSceneMeshMatrixChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneMeshMatrixChanged.dispatch(this.scene, this);
   }
   /**
    * Attaches a parent transform to this transform.
@@ -82741,46 +82900,45 @@ var SceneMesh = class {
    * @param opts - Options to preserve world transformation.
    */
   setParentTransformId(parentTransformId, opts) {
-    if (this.destroyed) {
-      return this.model.scene.logError({
+    const parent = parentTransformId ? (this.model?.transforms ?? this.scene.transforms)[parentTransformId] : null;
+    if (parentTransformId && !parent) {
+      return this.scene.logError({
         ok: false,
-        type: 1 /* InvalidOperation */,
-        error: `[SceneMesh.setParentTransformId] Cannot set parent transform on destroyed SceneMesh ${this.id}`
+        type: 2 /* InvalidInput */,
+        error: `Parent transform '${parentTransformId}' is not bound in this scope`
       });
     }
-    let parentTransform = null;
-    if (parentTransformId) {
-      parentTransform = this.model.transforms[parentTransformId];
-      if (!parentTransform) {
-        return this.model.scene.logError({
-          ok: false,
-          type: 1 /* InvalidOperation */,
-          error: `[SceneMesh.setParentTransformId] SceneTransform "${parentTransformId}" not found in SceneModel`
-        });
-      }
-      if (parentTransform.model.id !== this.model.id) {
-        return this.model.scene.logError({
-          ok: false,
-          type: 1 /* InvalidOperation */,
-          error: `[SceneMesh.setParentTransformId] Cannot set parent transform to a SceneMesh in a different SceneModel: ${this.id}`
-        });
-      }
+    return this.setParentTransform(parent, opts);
+  }
+  /**
+   * Parents this instance to any transform in the same scene. Document membership
+   * stays unchanged. A failed world-preserving reparent leaves all state intact.
+   */
+  setParentTransform(parent, opts) {
+    if (this.destroyed || parent && (parent.destroyed || parent.scene !== this.scene)) {
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "Invalid parent transform or destroyed instance"
+      });
     }
-    const preserve = !!opts?.preserveWorld;
-    if (preserve) {
-      this.setWorldMatrixDirty();
-      const currentWorld = createMat4Float64(this.worldMatrix);
-      this._attachParentTransform(parentTransform);
-      if (parentTransform) {
-        const invParent = inverseMat4(parentTransform.worldMatrix, createMat4Float64());
-        mulMat4(invParent, currentWorld, this._ownLocalMatrix());
-      } else {
-        const invCoordSystem = inverseMat4(this.model.coordinateSystemMatrix, createMat4Float64());
-        mulMat4(invCoordSystem, currentWorld, this._ownLocalMatrix());
+    let local;
+    if (opts?.preserveWorld) {
+      const basis = parent?.worldMatrix ?? this.frame.matrix;
+      const determinant3 = determinantMat4(basis);
+      if (!Number.isFinite(determinant3) || determinant3 === 0) {
+        return this.scene.logError({
+          ok: false,
+          type: 1 /* InvalidOperation */,
+          error: "Cannot preserve placement under a singular transform"
+        });
       }
+      local = mulMat4(inverseMat4(basis, createMat4Float64()), this.worldMatrix, createMat4Float64());
+    }
+    this._attachParentTransform(parent);
+    if (local) {
+      this._localMatrix = local;
       this.setWorldMatrixDirty();
-    } else {
-      this._attachParentTransform(parentTransform);
     }
     return { ok: true, value: void 0 };
   }
@@ -82790,7 +82948,7 @@ var SceneMesh = class {
    */
   toParams() {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneMesh.toParams] Cannot get params of destroyed SceneMesh ${this.id}`
@@ -82798,13 +82956,15 @@ var SceneMesh = class {
     }
     const meshParams = {
       id: this.id,
+      source: this.source,
       geometryId: this.geometry.id,
       clipBoxId: this.clipBoxId ?? void 0,
       color: Array.from(this._color),
       opacity: this._opacity
     };
-    if (!isIdentityMat4(this._localMatrix)) {
-      meshParams.matrix = Array.from(this._localMatrix);
+    const exportedMatrix = exportLocalMatrix(this);
+    if (!isIdentityMat4(exportedMatrix)) {
+      meshParams.matrix = Array.from(exportedMatrix);
     }
     if (this.material !== null && this.material !== void 0) {
       meshParams.materialId = this.material.id;
@@ -82840,29 +83000,35 @@ var SceneMesh = class {
    * - You cannot destroy a SceneMesh that is currently used by a SceneObject; you must destroy the SceneObject first.
    */
   destroy() {
+    if (this.scene.behaviors.getAnimationsForTarget(this).length)
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: `Remove animations targeting '${this.uniqueId}' before destroying it`
+      });
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: "[SceneMesh.destroy] SceneMesh already destroyed"
       });
     }
     if (this.object) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: `[SceneMesh.destroy] Cannot destroy SceneMesh ${this.id} - SceneMesh is currently used by SceneObject ${this.object.id}, which you need to destroy first`
       });
     }
     if (this._parentTransform) {
-      this._parentTransform.removeChildMesh(this.id);
+      this._attachParentTransform(null);
     }
     this._parentTransform = null;
     this._lightingDomain?._meshes.delete(this);
     this._lightingDomain = void 0;
     const previousClipBox = this._clipBox;
     this._clipBox = null;
-    this.model._destroyMesh(this);
+    this.scene.instances.remove(this);
     this.destroyed = true;
     previousClipBox?._releaseMesh(this);
     return {
@@ -82874,6 +83040,16 @@ var SceneMesh = class {
 
 // ../sdk-oct2/src/model/scene/SceneObject.ts
 var SceneObject = class {
+  source;
+  get model() {
+    return this._model;
+  }
+  /**
+   * @internal Membership changes go through Scene.moveToModel.
+   */
+  _setDocument(model) {
+    this._model = model;
+  }
   /**
    * Unique ID of this SceneObject.
    *
@@ -82906,7 +83082,8 @@ var SceneObject = class {
   /**
    * The {@link SceneModel | SceneModel} that contains this SceneObject.
    */
-  model;
+  _model;
+  scene;
   /**
    * The {@link SceneMesh | Meshes} belonging to this SceneObject.
    */
@@ -82931,9 +83108,11 @@ var SceneObject = class {
    */
   constructor(cfg) {
     this.id = cfg.id;
+    this.source = componentSource(cfg.source, cfg.model?.source, cfg.id);
     this.originalSystemId = cfg.originalSystemId || this.id;
     this.layerId = cfg.layerId;
-    this.model = cfg.model;
+    this._model = cfg.model;
+    this.scene = cfg.scene;
     this.meshes = cfg.meshes;
     this.clippable = cfg.clippable;
   }
@@ -82950,29 +83129,29 @@ var SceneObject = class {
    */
   addMesh(meshId) {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: "[SceneObject.addMesh] SceneObject already destroyed"
       });
     }
-    const mesh = this.model.meshes[meshId];
-    if (!mesh) {
-      return this.model.scene.logError({
+    const mesh = typeof meshId === "string" ? (this.model?.meshes ?? this.scene.meshes)[meshId] : meshId;
+    if (!mesh || mesh.destroyed || mesh.scene !== this.scene) {
+      return this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
-        error: `[SceneObject.addMesh] Mesh with ID '${meshId}' does not exist in model '${this.model.id}'`
+        error: `[SceneObject.addMesh] Mesh with ID '${meshId}' does not exist in model '${this.model?.id ?? "scene"}'`
       });
     }
     if (mesh.object) {
       if (mesh.object.id === this.id) {
-        return this.model.scene.logError({
+        return this.scene.logError({
           ok: false,
           type: 1 /* InvalidOperation */,
           error: `[SceneObject.addMesh] Mesh with ID '${meshId}' is already added to SceneObject '${this.id}'`
         });
       }
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneObject.addMesh] Mesh with ID '${meshId}' is already added to SceneObject '${this.id}'`
@@ -82980,7 +83159,7 @@ var SceneObject = class {
     }
     mesh.object = this;
     this.meshes.push(mesh);
-    this.model.scene.events.onSceneObjectMeshAdded.dispatch(this, mesh);
+    this.scene.events.onSceneObjectMeshAdded.dispatch(this, mesh);
     return { ok: true, value: void 0 };
   }
   /**
@@ -82996,29 +83175,29 @@ var SceneObject = class {
    */
   removeMesh(meshId) {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: "[SceneObject.removeMesh] SceneObject already destroyed"
       });
     }
-    const mesh = this.model.meshes[meshId];
-    if (!mesh) {
-      return this.model.scene.logError({
+    const mesh = typeof meshId === "string" ? (this.model?.meshes ?? this.scene.meshes)[meshId] : meshId;
+    if (!mesh || mesh.destroyed || mesh.scene !== this.scene) {
+      return this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
-        error: `[SceneObject.removeMesh] Mesh with ID '${meshId}' does not exist in model '${this.model.id}'`
+        error: `[SceneObject.removeMesh] Mesh with ID '${meshId}' does not exist in model '${this.model?.id ?? "scene"}'`
       });
     }
     if (mesh.object === void 0) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneObject.removeMesh] Mesh with ID '${meshId}' is not part of any SceneObject`
       });
     }
     if (mesh.object?.id !== this.id) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneObject.removeMesh] Mesh with ID '${meshId}' is not part of SceneObject '${this.id}'`
@@ -83029,7 +83208,7 @@ var SceneObject = class {
     if (index !== -1) {
       this.meshes.splice(index, 1);
     }
-    this.model.scene.events.onSceneObjectMeshRemoved.dispatch(this, mesh);
+    this.scene.events.onSceneObjectMeshRemoved.dispatch(this, mesh);
     return { ok: true, value: void 0 };
   }
   /**
@@ -83037,7 +83216,7 @@ var SceneObject = class {
    */
   toParams() {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: "[SceneObject.toParams] SceneObject already destroyed"
@@ -83045,6 +83224,7 @@ var SceneObject = class {
     }
     const sceneObjectParams = {
       id: this.id,
+      source: this.source,
       meshIds: []
     };
     if (this.originalSystemId !== this.id) {
@@ -83073,18 +83253,2238 @@ var SceneObject = class {
    */
   destroy() {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: "[SceneObject.destroy] SceneObject already destroyed"
       });
     }
-    this.model._destroyObject(this);
+    this.scene.instances.remove(this);
     this.destroyed = true;
     return {
       ok: true,
       value: void 0
     };
+  }
+};
+
+// ../sdk-oct2/src/model/scene/SceneInstances.ts
+var SceneInstances = class {
+  constructor(scene) {
+    this.scene = scene;
+  }
+  scene;
+  meshes = /* @__PURE__ */ Object.create(null);
+  transforms = /* @__PURE__ */ Object.create(null);
+  /**
+   * Changes only lifetime membership. Runtime identity, parentage, placement and
+   * source frame remain stable. Active import scopes must finish before a move.
+   */
+  move(instance, target) {
+    const previous = instance.model;
+    const fail2 = (error) => this.scene.logError({ ok: false, type: 1 /* InvalidOperation */, error });
+    if (instance.destroyed || instance.scene !== this.scene || this.scene.destroyed || this.scene._clearing || target && target.scene !== this.scene)
+      return fail2("Cannot move an unavailable or foreign instance");
+    if (!!previous?.scratchpad !== !!target?.scratchpad)
+      return fail2("Changing scratchpad publication requires creating a new instance");
+    if (previous === target) return { ok: true, value: void 0 };
+    const blocked = target?._assertCanCreate("moveToModel");
+    if (blocked) return blocked;
+    if (previous?.activeBatch || previous?.building || previous?.destroying)
+      return fail2("Finish the source document's load before moving its instances");
+    const kind = instance instanceof SceneMesh ? "meshes" : instance instanceof SceneTransform ? "transforms" : "objects";
+    if (target?.[kind][instance.id]) return fail2(`The destination already binds '${instance.id}'`);
+    if (!(instance instanceof SceneObject) && this.scene.behaviors.getAnimationsForTarget(instance).length) {
+      return fail2("Remove animations targeting this instance before changing its document");
+    }
+    if (instance instanceof SceneMesh && instance.representationId !== void 0) {
+      return fail2("Clear the scoped representation binding before changing its document");
+    }
+    if (instance instanceof SceneMesh) instance.setLightingDomain(instance.lightingDomain);
+    if (previous) {
+      delete previous[kind][instance.id];
+      previous.stats[this.stat(kind)]--;
+    }
+    instance._setDocument(target);
+    if (target) {
+      target[kind][instance.id] = instance;
+      target.stats[this.stat(kind)]++;
+    }
+    this.scene.events.onSceneInstanceDocumentChanged.dispatch(this.scene, instance);
+    return { ok: true, value: void 0 };
+  }
+  register(kind, instance) {
+    const model = instance.model;
+    if (model) {
+      model[kind][instance.id] = instance;
+      model.stats[this.stat(kind)]++;
+      model._recordActiveBatchComponent(instance);
+    }
+    if (kind === "meshes") {
+      const mesh = instance;
+      this.meshes[mesh.uniqueId] = mesh;
+      mesh.geometry.numMeshes++;
+      mesh.geometry.meshes.add(mesh);
+      if (mesh.material) {
+        mesh.material.numMeshes++;
+        mesh.material.meshes.add(mesh);
+      }
+      this.scene.events.onSceneMeshCreated.dispatch(this.scene, mesh);
+    } else if (kind === "transforms") {
+      const transform2 = instance;
+      this.transforms[transform2.uniqueId] = transform2;
+      this.scene.events.onSceneTransformCreated.dispatch(this.scene, transform2);
+    } else {
+      this.scene._registerObject(instance);
+    }
+  }
+  remove(instance) {
+    const kind = instance instanceof SceneMesh ? "meshes" : instance instanceof SceneTransform ? "transforms" : "objects";
+    const model = instance.model;
+    if (model) {
+      delete model[kind][instance.id];
+      model.stats[this.stat(kind)]--;
+    }
+    if (instance instanceof SceneMesh) {
+      delete this.meshes[instance.uniqueId];
+      instance.geometry.numMeshes--;
+      instance.geometry.meshes.delete(instance);
+      if (instance.material) {
+        instance.material.numMeshes--;
+        instance.material.meshes.delete(instance);
+      }
+      this.scene.events.onSceneMeshDestroyed.dispatch(this.scene, instance);
+      this.scene.assets.collect(instance.geometry);
+      if (instance.material) this.scene.assets.collect(instance.material);
+    } else if (instance instanceof SceneTransform) {
+      delete this.transforms[instance.uniqueId];
+      this.scene.events.onSceneTransformDestroyed.dispatch(this.scene, instance);
+    } else {
+      for (const variant of this.scene.getVariantSetsForObject(instance.id)) variant.destroy();
+      for (const mesh of instance.meshes) mesh.object = null;
+      this.scene._deregisterObject(instance);
+    }
+  }
+  stat(kind) {
+    return kind === "meshes" ? "numMeshes" : kind === "objects" ? "numObjects" : "numTransforms";
+  }
+};
+
+// ../sdk-oct2/src/model/scene/SceneInstanceFactory.ts
+var SceneInstanceFactory = class {
+  constructor(scene, model = null) {
+    this.scene = scene;
+    this.model = model;
+  }
+  scene;
+  model;
+  get meshes() {
+    return this.model?.meshes ?? this.scene.meshes;
+  }
+  get geometries() {
+    return this.model?.geometries ?? this.scene.geometries;
+  }
+  get materials() {
+    return this.model?.materials ?? this.scene.materials;
+  }
+  get transforms() {
+    return this.model?.transforms ?? this.scene.transforms;
+  }
+  get clipBoxes() {
+    return this.model?.clipBoxes ?? this.scene.clipBoxes;
+  }
+  _assertCanCreate(operation) {
+    if (this.scene.destroyed || this.scene._clearing) {
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: `[Scene.${operation}] Scene is not available`
+      });
+    }
+    return this.model?._assertCanCreate(operation) ?? null;
+  }
+  checkIdentity(kind, id) {
+    const key = kind === "objects" ? this.model?.globalizedIds ? `${this.model.id}.${id}` : id : this.scene.assets.identity(id, this.model);
+    if (typeof id !== "string" || !id || this.scene[kind][key]) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `Invalid or duplicate ${kind} ID '${id}'`
+      });
+    }
+    return null;
+  }
+  createTransform(transformParams) {
+    const createError = this._assertCanCreate("createTransform");
+    if (createError) {
+      return createError;
+    }
+    const identityError = this.checkIdentity("transforms", transformParams.id);
+    if (identityError) return identityError;
+    if (!transformParams.id) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createTransform] Parameter expected: transformParams.id"
+      });
+    }
+    if (this.transforms[transformParams.id]) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createTransform] SceneTransform already exists with this ID: ${transformParams.id}`
+      });
+    }
+    let parentTransform;
+    if (transformParams.parentTransformId) {
+      parentTransform = this.transforms[transformParams.parentTransformId];
+      if (!parentTransform) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createTransform] Parent SceneTransform not found: ${transformParams.parentTransformId}`
+        });
+      }
+    }
+    const sceneTransform = new SceneTransform(this.scene, transformParams, this.model);
+    if (parentTransform) {
+      sceneTransform.setParentTransform(parentTransform);
+    }
+    this.scene.instances.register("transforms", sceneTransform);
+    return {
+      ok: true,
+      value: sceneTransform
+    };
+  }
+  createMesh(meshParams) {
+    if (meshParams.representationMode !== void 0 && !["replace", "augment"].includes(meshParams.representationMode)) {
+      return { ok: false, type: 2 /* InvalidInput */, error: "Invalid representation ownership mode" };
+    }
+    if (meshParams.representationId !== void 0 && (typeof meshParams.representationId !== "string" || !meshParams.representationId)) {
+      return { ok: false, type: 2 /* InvalidInput */, error: "Representation binding must be a nonempty ID" };
+    }
+    let {
+      id,
+      geometryId,
+      parentTransformId,
+      materialId,
+      matrix,
+      position,
+      scale: scale3,
+      rotation,
+      quaternion,
+      origin: origin2,
+      color,
+      opacity,
+      frameTime,
+      morphWeights,
+      billboard,
+      bin
+    } = meshParams;
+    const createError = this._assertCanCreate("createMesh");
+    if (createError) {
+      return createError;
+    }
+    const identityError = this.checkIdentity("meshes", id);
+    if (identityError) return identityError;
+    if (this.meshes[id]) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createMesh] SceneMesh already exists with this ID: '${id}'`
+      });
+    }
+    let transform2;
+    if (parentTransformId) {
+      transform2 = this.transforms[parentTransformId];
+      if (!transform2) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createMesh] parent SceneTransform not found: '${parentTransformId}'`
+        });
+      }
+    }
+    const geometry = this.geometries[geometryId];
+    if (!geometry) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createMesh] SceneGeometry not found: '${geometryId}'`
+      });
+    }
+    const clipBox = meshParams.clipBoxId !== void 0 ? this.clipBoxes[meshParams.clipBoxId] : void 0;
+    if (meshParams.clipBoxId !== void 0 && !clipBox) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `Clip box not found: ${meshParams.clipBoxId}`
+      });
+    }
+    if (clipBox && (meshParams.representationId || geometry.primitive === GaussianSplatsPrimitive)) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "Clip boxes do not yet support representations or Gaussian splats"
+      });
+    }
+    const material = materialId ? this.materials[materialId] : void 0;
+    if (materialId && !material) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createMesh] Material not found: '${materialId}'`
+      });
+    }
+    if (origin2 && origin2.length !== 3) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createMesh] Parameter 'origin' is not a vec3 array`
+      });
+    }
+    if (!matrix) {
+      if (position || scale3 || rotation || quaternion || origin2) {
+        if (position && position.length !== 3) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createMesh] Parameter 'position' is not a vec3 array`
+          });
+        }
+        if (scale3 && scale3.length !== 3) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createMesh] Parameter 'scale' is not a vec3 array`
+          });
+        }
+        if (rotation && rotation.length !== 3) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createMesh] Parameter 'rotation' is not a vec3 array`
+          });
+        }
+        if (quaternion && quaternion.length !== 4) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createMesh] Parameter 'quaternion' is not a vec4 array`
+          });
+        }
+        matrix = identityMat4();
+        composeMat4(
+          position || [0, 0, 0],
+          quaternion || eulerToQuat(rotation || [0, 0, 0], "XYZ", identityQuat()),
+          scale3 || [1, 1, 1],
+          matrix
+        );
+      }
+    } else {
+      if (matrix.length !== 16) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createMesh] Parameter 'matrix' is not a mat4 array`
+        });
+      }
+      matrix = createMat4Float64(matrix);
+    }
+    if (origin2 && matrix) {
+      matrix[12] += origin2[0];
+      matrix[13] += origin2[1];
+      matrix[14] += origin2[2];
+    }
+    if (color && color.length !== 3) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createMesh] Parameter 'color' is not a vec3 array`
+      });
+    }
+    if (billboard !== void 0 && billboard !== "none" && billboard !== "spherical") {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createMesh] Unsupported billboard mode: '${billboard}'`
+      });
+    }
+    if (frameTime !== void 0 && !Number.isFinite(frameTime)) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createMesh] Parameter 'frameTime' must be finite"
+      });
+    }
+    const morphTargetCount = geometry.morphTargets?.length ?? 0;
+    if (morphWeights !== void 0) {
+      if (morphWeights.length !== morphTargetCount) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createMesh] Parameter 'morphWeights' length must match geometry morph target count ${morphTargetCount}`
+        });
+      }
+      for (let i = 0; i < morphWeights.length; i++) {
+        if (!Number.isFinite(morphWeights[i])) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createMesh] Parameter 'morphWeights[${i}]' must be finite`
+          });
+        }
+      }
+    }
+    const sceneMesh = new SceneMesh({
+      id,
+      source: meshParams.source,
+      scene: this.scene,
+      model: this.model,
+      clipBox,
+      geometry,
+      material,
+      matrix,
+      color,
+      opacity,
+      frameTime,
+      morphWeights,
+      billboard: billboard ?? "none",
+      representationId: meshParams.representationId,
+      representationMode: meshParams.representationMode,
+      bin
+    });
+    if (transform2) {
+      sceneMesh.setParentTransform(transform2);
+    }
+    this.scene.instances.register("meshes", sceneMesh);
+    return {
+      ok: true,
+      value: sceneMesh
+    };
+  }
+  createObject(objectParams) {
+    const { id, meshIds, layerId, originalSystemId } = objectParams;
+    const createError = this._assertCanCreate("createObject");
+    if (createError) {
+      return createError;
+    }
+    const identityError = this.checkIdentity("objects", id);
+    if (identityError) return identityError;
+    if (!meshIds || meshIds.length === 0) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createObject] No meshes specified"
+      });
+    }
+    const objectId = this.model?.globalizedIds ? `${this.model.id}.${id}` : id;
+    if (this.scene.objects[objectId]) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createObject] SceneObject already exists: '${objectId}'`
+      });
+    }
+    const meshes = [];
+    for (let meshIdIdx = 0, meshIdLen = meshIds.length; meshIdIdx < meshIdLen; meshIdIdx++) {
+      const meshId = meshIds[meshIdIdx];
+      const mesh = this.meshes[meshId];
+      if (!mesh) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createObject] SceneMesh not found: '${meshId}'`
+        });
+      }
+      if (mesh.object) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createObject] SceneMesh '${meshId}' already belongs to existing SceneObject '${mesh.object.id}'`
+        });
+      }
+      meshes.push(mesh);
+    }
+    const sceneObject = new SceneObject({
+      id: objectId,
+      source: objectParams.source,
+      originalSystemId: originalSystemId ?? objectParams.source?.componentId ?? id,
+      layerId: this.model?.layerId || layerId,
+      clippable: objectParams.clippable,
+      scene: this.scene,
+      model: this.model,
+      meshes
+    });
+    for (let i = 0, len = meshes.length; i < len; i++) {
+      const mesh = meshes[i];
+      mesh.object = sceneObject;
+    }
+    this.scene.instances.register("objects", sceneObject);
+    return {
+      ok: true,
+      value: sceneObject
+    };
+  }
+};
+
+// ../sdk-oct2/src/model/scene/representation/RepresentationSchemaCatalog.ts
+var RepresentationSchemaCatalog = class {
+  schemas = /* @__PURE__ */ new Map();
+  /**
+   * Adds a CPU validator without creating renderer/device state.
+   *
+   * @param schema Validator for exactly one semantic type and supported versions.
+   * @returns Success, or InvalidInput for duplicate type or invalid version declarations.
+   */
+  register(schema) {
+    if (!schema.type || !schema.versions.length || schema.versions.some((version2) => !Number.isSafeInteger(version2) || version2 < 1) || this.schemas.has(schema.type)) {
+      return {
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `Duplicate or invalid representation schema: ${schema.type}`
+      };
+    }
+    this.schemas.set(schema.type, schema);
+    return { ok: true, value: void 0 };
+  }
+  /**
+   * Checks a definition without requiring executable rendering support.
+   *
+   * @param input Structurally valid definition and resolved semantic resource inputs.
+   * @returns Known schema validity, or an explicit unknown/unsupported result.
+   * Validator exceptions become an invalid result with code validator-failed.
+   */
+  validate(input) {
+    const schema = this.schemas.get(input.representation.type);
+    if (!schema) return { status: "unknown-type" };
+    if (!schema.versions.includes(input.representation.schemaVersion)) return { status: "unsupported-schema" };
+    try {
+      const issues = schema.validate(input);
+      return issues.length ? { status: "invalid", issues } : { status: "valid" };
+    } catch (error) {
+      return { status: "invalid", issues: [{ code: "validator-failed", path: "", message: String(error) }] };
+    }
+  }
+};
+
+// ../sdk-oct2/src/model/scene/internal/materialTextures.ts
+function materialTextures(material) {
+  return [
+    material.colorTexture,
+    material.metallicRoughnessTexture,
+    material.normalsTexture,
+    material.occlusionTexture,
+    material.emissiveTexture
+  ].filter((texture) => !!texture);
+}
+
+// ../sdk-oct2/src/model/scene/SceneResourceSelection.ts
+var SceneResourceSelection = class {
+  geometries = [];
+  materials = [];
+  textures = [];
+  names = /* @__PURE__ */ new Map();
+  used = { geometries: /* @__PURE__ */ new Set(), materials: /* @__PURE__ */ new Set(), textures: /* @__PURE__ */ new Set() };
+  inherited;
+  constructor(model) {
+    this.inherited = model.resourceSelection;
+    for (const [name14, geometry] of Object.entries(model.geometries)) this.add("geometries", geometry, name14);
+    for (const [name14, material] of Object.entries(model.materials)) this.add("materials", material, name14);
+    for (const [name14, texture] of Object.entries(model.textures)) this.add("textures", texture, name14);
+    for (const mesh of Object.values(model.meshes)) {
+      this.add("geometries", mesh.geometry);
+      if (mesh.material) this.add("materials", mesh.material);
+    }
+    for (const material of this.materials) {
+      for (const texture of materialTextures(material)) this.add("textures", texture);
+    }
+  }
+  id(asset) {
+    const id = this.names.get(asset);
+    if (id === void 0) throw new Error(`Resource '${asset.uniqueId}' is outside the export selection`);
+    return id;
+  }
+  add(kind, asset, preferred = asset.id) {
+    if (this.names.has(asset)) return;
+    preferred = this.inherited?.id(asset) ?? preferred;
+    let id = preferred;
+    let suffix = 1;
+    while (this.used[kind].has(id)) id = `${preferred}~${suffix++}`;
+    this.used[kind].add(id);
+    this.names.set(asset, id);
+    this[kind].push(asset);
+  }
+};
+
+// ../sdk-oct2/src/model/scene/internal/exportAnimationChannels.ts
+function exportAnimationChannels(source, channels, resources) {
+  return channels.map((channel) => {
+    if (channel.target.type !== "material") return channel;
+    const material = source.materials[channel.target.materialId];
+    if (!material) throw new Error(`Unresolved material animation target '${channel.target.materialId}'`);
+    return { ...channel, target: { ...channel.target, materialId: resources.id(material) } };
+  });
+}
+
+// ../sdk-oct2/src/model/scene/internal/sceneSourceToParams.ts
+function sceneSourceToParams(source, options = {}) {
+  if (source.destroyed) {
+    return source.scene.logError({
+      ok: false,
+      type: 1 /* InvalidOperation */,
+      error: "[SceneModel.toParams] SceneModel already destroyed"
+    });
+  }
+  const sceneModelParams = {
+    id: source.id,
+    source: source.source,
+    coordinateSystem: source.coordinateSystem.toParams(),
+    dataResources: Object.values(source.dataResources).map((resource) => resource.toParams()),
+    representations: Object.values(source.representations).map((representation) => representation.toParams()),
+    scratchpad: source.scratchpad,
+    loadingMode: source.loadingMode,
+    sealed: source.sealed,
+    updateMode: source.updateMode,
+    lights: Object.values(source.lights).map((light) => {
+      const result = light.toParams();
+      if (result.ok === false) throw new Error(result.error);
+      return result.value;
+    }),
+    clipBoxes: [],
+    geometriesCompressed: [],
+    textures: [],
+    materials: [],
+    transforms: [],
+    meshes: [],
+    objects: [],
+    variantSets: [],
+    animations: []
+  };
+  const selected = new SceneResourceSelection(source);
+  const transforms = new Set(Object.values(source.transforms));
+  const meshes = new Set(Object.values(source.meshes));
+  for (const geometry of options.includeResources === false ? [] : selected.geometries) {
+    const res = geometry.toParams();
+    if (!res.ok) {
+      return res;
+    }
+    sceneModelParams.geometriesCompressed.push({
+      ...res.value,
+      id: selected.id(geometry)
+    });
+  }
+  for (const box of Object.values(source.clipBoxes)) {
+    const result = box.toParams();
+    if (!result.ok) return result;
+    sceneModelParams.clipBoxes.push(result.value);
+  }
+  for (const key in source.meshes) {
+    const res = source.meshes[key].toParams();
+    if (!res.ok) {
+      return res;
+    }
+    const mesh = source.meshes[key];
+    if (mesh.parentTransform && !transforms.has(mesh.parentTransform))
+      return source.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "Export includes a transform outside this document"
+      });
+    sceneModelParams.meshes.push({
+      ...res.value,
+      geometryId: selected.id(mesh.geometry),
+      materialId: mesh.material ? selected.id(mesh.material) : void 0
+    });
+  }
+  for (const key in source.objects) {
+    if (source.objects[key].meshes.some((mesh) => !meshes.has(mesh)))
+      return source.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "Export includes a mesh outside this document"
+      });
+    const res = source.objects[key].toParams();
+    if (!res.ok) {
+      return res;
+    }
+    sceneModelParams.objects.push(res.value);
+  }
+  for (const key in source.variantSets) {
+    sceneModelParams.variantSets.push(source.variantSets[key].toParams());
+  }
+  for (const key in source.animations) {
+    const res = source.animations[key].toParams();
+    if (!res.ok) {
+      return res;
+    }
+    sceneModelParams.animations.push({
+      ...res.value,
+      channels: exportAnimationChannels(source, res.value.channels, selected)
+    });
+  }
+  for (const key in source.transforms) {
+    if (source.transforms[key].parentTransform && !transforms.has(source.transforms[key].parentTransform))
+      return source.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "Export includes a transform outside this document"
+      });
+    const res = source.transforms[key].toParams();
+    if (!res.ok) {
+      return res;
+    }
+    sceneModelParams.transforms.push(res.value);
+  }
+  for (const texture of options.includeResources === false ? [] : selected.textures) {
+    const res = texture.toParams();
+    if (!res.ok) return res;
+    sceneModelParams.textures.push({ ...res.value, id: selected.id(texture) });
+  }
+  for (const material of options.includeResources === false ? [] : selected.materials) {
+    const res = material.toParams();
+    if (!res.ok) return res;
+    const definition = { ...res.value, id: selected.id(material) };
+    for (const slot of ["color", "metallicRoughness", "normals", "occlusion", "emissive"]) {
+      const texture = material[`${slot}Texture`];
+      definition[`${slot}TextureId`] = texture ? selected.id(texture) : void 0;
+    }
+    sceneModelParams.materials.push(definition);
+  }
+  return {
+    ok: true,
+    value: sceneModelParams
+  };
+}
+
+// ../sdk-oct2/src/model/scene/buildEdgeIndices.ts
+var uniquePositions = [];
+var indicesLookup = [];
+var indicesReverseLookup = [];
+var weldedIndices = [];
+var faces = [];
+var numFaces = 0;
+var compa = new Uint16Array(3);
+var compb = new Uint16Array(3);
+var compc = new Uint16Array(3);
+var a = createVec3Float64();
+var b = createVec3Float64();
+var c = createVec3Float64();
+var cb = createVec3Float64();
+var ab = createVec3Float64();
+var cross2 = createVec3Float64();
+var normal = createVec3Float64();
+function weldVertices(positions, indices) {
+  const positionsMap = {};
+  let vx;
+  let vy;
+  let vz;
+  let key;
+  const precisionPoints = 4;
+  const precision = Math.pow(10, precisionPoints);
+  let i;
+  let len;
+  let lenUniquePositions = 0;
+  for (i = 0, len = positions.length; i < len; i += 3) {
+    vx = positions[i];
+    vy = positions[i + 1];
+    vz = positions[i + 2];
+    key = Math.round(vx * precision) + "_" + Math.round(vy * precision) + "_" + Math.round(vz * precision);
+    if (positionsMap[key] === void 0) {
+      positionsMap[key] = lenUniquePositions / 3;
+      uniquePositions[lenUniquePositions++] = vx;
+      uniquePositions[lenUniquePositions++] = vy;
+      uniquePositions[lenUniquePositions++] = vz;
+    }
+    indicesLookup[i / 3] = positionsMap[key];
+  }
+  for (i = 0, len = indices.length; i < len; i++) {
+    weldedIndices[i] = indicesLookup[indices[i]];
+    indicesReverseLookup[weldedIndices[i]] = indices[i];
+  }
+}
+function buildFaces(numIndices, aabb) {
+  numFaces = 0;
+  for (let i = 0, len = numIndices; i < len; i += 3) {
+    const ia = weldedIndices[i] * 3;
+    const ib = weldedIndices[i + 1] * 3;
+    const ic = weldedIndices[i + 2] * 3;
+    if (aabb) {
+      compa[0] = uniquePositions[ia];
+      compa[1] = uniquePositions[ia + 1];
+      compa[2] = uniquePositions[ia + 2];
+      compb[0] = uniquePositions[ib];
+      compb[1] = uniquePositions[ib + 1];
+      compb[2] = uniquePositions[ib + 2];
+      compc[0] = uniquePositions[ic];
+      compc[1] = uniquePositions[ic + 1];
+      compc[2] = uniquePositions[ic + 2];
+      decompressPoint3WithAABB3(compa, aabb, a);
+      decompressPoint3WithAABB3(compb, aabb, b);
+      decompressPoint3WithAABB3(compc, aabb, c);
+    } else {
+      a[0] = uniquePositions[ia];
+      a[1] = uniquePositions[ia + 1];
+      a[2] = uniquePositions[ia + 2];
+      b[0] = uniquePositions[ib];
+      b[1] = uniquePositions[ib + 1];
+      b[2] = uniquePositions[ib + 2];
+      c[0] = uniquePositions[ic];
+      c[1] = uniquePositions[ic + 1];
+      c[2] = uniquePositions[ic + 2];
+    }
+    subVec3(c, b, cb);
+    subVec3(a, b, ab);
+    cross3Vec3(cb, ab, cross2);
+    normalizeVec3(cross2, normal);
+    const face = faces[numFaces] || (faces[numFaces] = { normal: createVec3Float64() });
+    face.normal[0] = normal[0];
+    face.normal[1] = normal[1];
+    face.normal[2] = normal[2];
+    numFaces++;
+  }
+}
+function buildEdgeIndices(positions, indices, aabb, edgeThreshold) {
+  weldVertices(positions, indices);
+  buildFaces(indices.length, aabb);
+  const edgeIndices = [];
+  const thresholdDot = Math.cos(DEGTORAD * edgeThreshold);
+  const edges = {};
+  let edge1;
+  let edge2;
+  let index1;
+  let index2;
+  let key;
+  let largeIndex = false;
+  let edge;
+  let normal1;
+  let normal2;
+  let dot3;
+  let ia;
+  let ib;
+  for (let i = 0, len = indices.length; i < len; i += 3) {
+    const faceIndex = i / 3;
+    for (let j = 0; j < 3; j++) {
+      edge1 = weldedIndices[i + j];
+      edge2 = weldedIndices[i + (j + 1) % 3];
+      index1 = Math.min(edge1, edge2);
+      index2 = Math.max(edge1, edge2);
+      key = index1 + "," + index2;
+      if (edges[key] === void 0) {
+        edges[key] = {
+          index1,
+          index2,
+          face1: faceIndex,
+          face2: void 0
+        };
+      } else {
+        edges[key].face2 = faceIndex;
+      }
+    }
+  }
+  for (key in edges) {
+    edge = edges[key];
+    if (edge.face2 !== void 0) {
+      normal1 = faces[edge.face1].normal;
+      normal2 = faces[edge.face2].normal;
+      dot3 = dotVec3(normal1, normal2);
+      if (dot3 > thresholdDot) {
+        continue;
+      }
+    }
+    ia = indicesReverseLookup[edge.index1];
+    ib = indicesReverseLookup[edge.index2];
+    if (!largeIndex && ia > 65535 || ib > 65535) {
+      largeIndex = true;
+    }
+    edgeIndices.push(ia);
+    edgeIndices.push(ib);
+  }
+  return largeIndex ? new Uint32Array(edgeIndices) : new Uint16Array(edgeIndices);
+}
+
+// ../sdk-oct2/src/model/scene/compressGeometryParams.ts
+function compressGeometryParams(geometryParams) {
+  const sourceVertexStates = geometryParams.vertexStates ?? geometryParams.frames;
+  const basePositions = geometryParams.positions ?? sourceVertexStates?.[0]?.positions;
+  const baseNormals = geometryParams.normals ?? sourceVertexStates?.[0]?.normals;
+  const aabb = collapseAABB3(createAABB3Float64());
+  expandAABB3Points3(aabb, basePositions);
+  const positionsCompressed = quantizePositions3(basePositions, aabb);
+  const vertexStatesCompressed = sourceVertexStates?.map((frame) => {
+    const frameAABB = collapseAABB3(createAABB3Float64());
+    expandAABB3Points3(frameAABB, frame.positions);
+    const expectedFrameUvLen = frame.positions.length / 3 * 2;
+    return {
+      ...frame.id !== void 0 ? { id: frame.id } : {},
+      ...frame.name !== void 0 ? { name: frame.name } : {},
+      ...frame.time !== void 0 ? { time: frame.time } : {},
+      aabb: frameAABB,
+      positionsCompressed: quantizePositions3(frame.positions, frameAABB),
+      normalsCompressed: frame.normals && frame.normals.length === frame.positions.length ? octEncodeNormalsToU16(frame.normals) : void 0,
+      uvsCompressed: frame.uvs && frame.uvs.length === expectedFrameUvLen ? packUVsToFloat32(frame.uvs) : void 0
+    };
+  });
+  const framesCompressed = geometryParams.frames ? vertexStatesCompressed : void 0;
+  const texCoordsCompressed = compressTexCoordChannels(geometryParams.texCoords, geometryParams.uvs, basePositions.length / 3 * 2);
+  const morphTargets = geometryParams.morphTargets?.map((target) => ({
+    ...target.id !== void 0 ? { id: target.id } : {},
+    ...target.name !== void 0 ? { name: target.name } : {},
+    ...target.positions !== void 0 ? { positions: target.positions } : {},
+    ...target.normals !== void 0 ? { normals: target.normals } : {},
+    ...target.uvs !== void 0 ? { uvs: target.uvs } : {}
+  }));
+  if (geometryParams.primitive === PointsPrimitive) {
+    return {
+      id: geometryParams.id,
+      primitive: PointsPrimitive,
+      uvsCompressed: texCoordsCompressed?.[0],
+      texCoordsCompressed,
+      aabb,
+      uvsDecompressMatrix: void 0,
+      positionsCompressed,
+      framesCompressed,
+      vertexStatesCompressed,
+      morphTargets,
+      colorsCompressed: geometryParams.colorsCompressed ? geometryParams.colorsCompressed : geometryParams.colors ? compressRGBColors(geometryParams.colors) : null,
+      origin: null
+    };
+  }
+  if (geometryParams.primitive === GaussianSplatsPrimitive) {
+    return {
+      id: geometryParams.id,
+      primitive: GaussianSplatsPrimitive,
+      uvsCompressed: texCoordsCompressed?.[0],
+      texCoordsCompressed,
+      aabb,
+      positionsCompressed,
+      framesCompressed,
+      vertexStatesCompressed,
+      morphTargets,
+      colorsCompressed: geometryParams.colorsCompressed ? geometryParams.colorsCompressed : geometryParams.colors ? compressRGBColors(geometryParams.colors) : null,
+      scales: geometryParams.scales,
+      rotations: geometryParams.rotations,
+      origin: null
+    };
+  }
+  if (geometryParams.primitive === LinesPrimitive) {
+    return {
+      id: geometryParams.id,
+      primitive: LinesPrimitive,
+      uvsCompressed: texCoordsCompressed?.[0],
+      texCoordsCompressed,
+      aabb,
+      positionsCompressed,
+      framesCompressed,
+      vertexStatesCompressed,
+      morphTargets,
+      colorsCompressed: geometryParams.colorsCompressed ? geometryParams.colorsCompressed : geometryParams.colors ? compressRGBColors(geometryParams.colors) : void 0,
+      indices: geometryParams.indices,
+      origin: null
+    };
+  } else {
+    let edgeIndices = geometryParams.edgeIndices ?? null;
+    if ((geometryParams.primitive === SolidPrimitive || geometryParams.primitive === SurfacePrimitive || geometryParams.primitive === TrianglesPrimitive) && geometryParams.indices && !edgeIndices) {
+      const built = buildEdgeIndices(positionsCompressed, geometryParams.indices, aabb, 10);
+      if (built && built.length > 0) edgeIndices = built;
+    }
+    const normalsCompressed = baseNormals && baseNormals.length === basePositions.length ? octEncodeNormalsToU16(baseNormals) : void 0;
+    const uvsCompressed = texCoordsCompressed?.[0];
+    return {
+      // Assume that closed triangle mesh is decomposed into open surfaces
+      id: geometryParams.id,
+      primitive: geometryParams.primitive,
+      aabb,
+      positionsCompressed,
+      framesCompressed,
+      vertexStatesCompressed,
+      morphTargets,
+      normalsCompressed,
+      uvsCompressed,
+      texCoordsCompressed,
+      colorsCompressed: geometryParams.colorsCompressed ? geometryParams.colorsCompressed : geometryParams.colors ? compressRGBColors(geometryParams.colors) : void 0,
+      indices: geometryParams.indices,
+      edgeIndices,
+      origin: null
+    };
+  }
+}
+function compressTexCoordChannels(texCoords, uvs, expectedLength) {
+  const result = {};
+  if (texCoords) {
+    for (const key of Object.keys(texCoords)) {
+      const channel = Number(key);
+      const values2 = texCoords[channel];
+      if (Number.isInteger(channel) && channel >= 0 && values2 && values2.length === expectedLength) {
+        result[channel] = packUVsToFloat32(values2);
+      }
+    }
+  }
+  if (uvs && uvs.length === expectedLength) {
+    result[0] = packUVsToFloat32(uvs);
+  }
+  return Object.keys(result).length > 0 ? result : void 0;
+}
+
+// ../sdk-oct2/src/model/scene/validateGeometryNumbers.ts
+function validateGeometryNumbers(params, vertexCount2) {
+  const checkAttributes = (values2, prefix) => {
+    if (!values2) return `${prefix} is missing`;
+    for (const key of [
+      "positions",
+      "normals",
+      "uvs",
+      "colors",
+      "positionsCompressed",
+      "normalsCompressed",
+      "uvsCompressed",
+      "colorsCompressed",
+      "aabb",
+      "uvsDecompressMatrix",
+      "scales",
+      "rotations"
+    ]) {
+      const array = values2[key];
+      if (array == null) continue;
+      if (!Number.isSafeInteger(array.length) || array.length < 0) return `${prefix}.${key} must be an array`;
+      for (let i = 0; i < array.length; i++) {
+        if (!Number.isFinite(array[i])) return `${prefix}.${key}[${i}] must be finite`;
+        if (!Number.isFinite(Math.fround(array[i]))) return `${prefix}.${key}[${i}] exceeds the supported Float32 range`;
+      }
+    }
+    if (values2.aabb && (values2.aabb[0] > values2.aabb[3] || values2.aabb[1] > values2.aabb[4] || values2.aabb[2] > values2.aabb[5])) {
+      return `${prefix}.aabb has inverted bounds`;
+    }
+    for (const key of ["texCoords", "texCoordsCompressed", "texCoordsDecompressMatrices"]) {
+      for (const [channel, array] of Object.entries(values2[key] ?? {})) {
+        if (!Number.isSafeInteger(Number(channel)) || Number(channel) < 0) return `Invalid texture coordinate channel ${channel}`;
+        const error2 = checkAttributes({ uvs: array }, `${prefix}.${key}[${channel}]`);
+        if (error2) return error2;
+      }
+    }
+  };
+  const error = checkAttributes(params, "geometry");
+  if (error) return error;
+  for (const key of ["frames", "vertexStates", "framesCompressed", "vertexStatesCompressed", "morphTargets"]) {
+    const states = params[key];
+    if (states == null) continue;
+    if (!Array.isArray(states)) return `${key} must be an array`;
+    for (let i = 0; i < states.length; i++) {
+      const stateError = checkAttributes(states[i], `${key}[${i}]`);
+      if (stateError) return stateError;
+    }
+  }
+  for (const key of ["indices", "edgeIndices"]) {
+    const indices = params[key];
+    if (!indices) continue;
+    for (let i = 0; i < indices.length; i++) {
+      if (!Number.isSafeInteger(indices[i]) || indices[i] < 0 || indices[i] >= vertexCount2) {
+        return `${key}[${i}] must be an integer within the vertex range`;
+      }
+    }
+  }
+  if (params.scales && params.scales.length !== vertexCount2 * 3) return "Splat scales must contain three values per vertex";
+  if (params.rotations && params.rotations.length !== vertexCount2 * 4) return "Splat rotations must contain four values per vertex";
+}
+
+// ../sdk-oct2/src/model/scene/validateMorphTargetUVs.ts
+function validateMorphTargetUVs(targets, baseUVs, vertexCount2) {
+  for (let index = 0; index < targets.length; index++) {
+    const uvs = targets[index].uvs;
+    if (uvs === void 0) continue;
+    if (!baseUVs || baseUVs.length !== vertexCount2 * 2) {
+      return `morphTargets[${index}].uvs requires base channel-0 UVs with two values per vertex.`;
+    }
+    if (uvs.length !== baseUVs.length) return `morphTargets[${index}].uvs length must match base UVs.`;
+    for (let i = 0; i < uvs.length; i++) {
+      if (!Number.isFinite(uvs[i])) return `morphTargets[${index}].uvs[${i}] must be finite.`;
+    }
+  }
+}
+
+// ../sdk-oct2/src/model/scene/SceneGeometry.ts
+var SCENE_GEOMETRY_UPDATE_POSITIONS_COMPRESSED = 1 << 0;
+var SCENE_GEOMETRY_UPDATE_INDICES = 1 << 1;
+var SCENE_GEOMETRY_UPDATE_NORMALS_COMPRESSED = 1 << 2;
+var SCENE_GEOMETRY_UPDATE_UVS_COMPRESSED = 1 << 3;
+function narrowIndexArray(indices) {
+  if (!indices || indices.length === 0) {
+    return indices;
+  }
+  let max = 0;
+  for (let i = 0, len = indices.length; i < len; i++) {
+    if (indices[i] > max) {
+      max = indices[i];
+    }
+  }
+  const targetBytes = max < 256 ? 1 : max < 65536 ? 2 : 4;
+  if (ArrayBuffer.isView(indices) && indices.BYTES_PER_ELEMENT <= targetBytes) {
+    return indices;
+  }
+  const src = indices;
+  const narrowed = targetBytes === 1 ? new Uint8Array(src) : targetBytes === 2 ? new Uint16Array(src) : new Uint32Array(src);
+  return narrowed;
+}
+var SceneGeometry = class {
+  /**
+   * ID for the geometry.
+   */
+  id;
+  /**
+   * The global ID of this SceneGeometry, unique among all SceneGeometrys within the Scene,
+   * which is the concatenation of the SceneModel's ID and this SceneGeometry's ID, separated by "__".
+   */
+  uniqueId;
+  /**
+   * Optional document of origin; use scene for canonical ownership.
+   */
+  model;
+  scene;
+  /**
+   * Persistent identity, present only on an immutable library definition.
+   */
+  get externalReference() {
+    return this.scene.assets.reference(this);
+  }
+  updateMode;
+  meshes = /* @__PURE__ */ new Set();
+  /**
+   * Primitive type.
+   *
+   * Possible values are {@link base!constants.SolidPrimitive | SolidPrimitive}, {@link base!constants.SurfacePrimitive | SurfacePrimitive},
+   * {@link base!constants.LinesPrimitive | LinesPrimitive}, {@link base!constants.PointsPrimitive | PointsPrimitive}
+   * and {@link base!constants.TrianglesPrimitive | TrianglesPrimitive}.
+   */
+  primitive;
+  /**
+   * Axis-aligned, non-quantized 3D boundary of the geometry's vertex positions.
+   */
+  aabb;
+  /**
+   * 4x4 matrix to de-quantize the geometry's UV coordinates, when UVs are provided.
+   */
+  uvsDecompressMatrix;
+  /**
+   * Current/base 3D vertex positions, quantized as 16-bit integers.
+   *
+   * Internally, the Viewer dequantizes these using {@link SceneGeometry.aabb | SceneGeometry.aabb}, which provides their unquantized 3D boundary.
+   *
+   * When geometry was authored with {@link SceneGeometry.framesCompressed | framesCompressed}
+   * and no top-level positions, this is initialized from frame zero.
+   */
+  _positionsCompressed;
+  _indices;
+  _normalsCompressed;
+  _uvsCompressed;
+  /**
+   * Complete fixed-topology geometry frames, each carrying replacement
+   * positions and optional normals. These are complete vertex states, not
+   * deltas from the base geometry. The first frame can act as the geometry's
+   * current/base positions when the geometry was authored without top-level
+   * `positions`.
+   *
+   * Renderers treat frames as immutable geometry-owned data. Meshes select an
+   * interpolation time through {@link SceneMesh.frameTime}; changing that time
+   * updates per-mesh animation state, not the shared geometry payload.
+   */
+  framesCompressed;
+  /**
+   * Complete untimed fixed-topology replacement vertex states.
+   */
+  vertexStatesCompressed;
+  /**
+   * Weighted morph target deltas relative to this geometry's base attributes.
+   */
+  morphTargets;
+  /**
+   * Monotonically increases each time fixed-count dynamic geometry data is
+   * replaced through {@link SceneGeometry.positionsCompressed} or
+   * {@link SceneGeometry.indices}, {@link SceneGeometry.normalsCompressed} or
+   * {@link SceneGeometry.uvsCompressed}.
+   */
+  version = 0;
+  /**
+   * Bitmask describing the most recent fixed-count dynamic update. Renderers
+   * use this during {@link SceneEvents.onSceneGeometryUpdated} to choose a
+   * narrow in-place upload path when possible.
+   */
+  lastUpdateFlags = 0;
+  /**
+   * UV coordinates, packed as 32-bit floats (one `Float32Array` of
+   * length `2 × vertexCount`). UVs ship to the GPU uncompressed so
+   * tiling values (UVs outside `[0, 1]`) survive intact — the shader
+   * applies a per-fragment `fract()` before transforming into the
+   * mesh's atlas sub-rect.
+   *
+   * Assigning replaces channel zero on a dynamic model. UVs must already
+   * exist, keep the same length, and contain only finite values. Values outside
+   * `[0, 1]` are supported. A successful update synchronizes channel zero in
+   * {@link SceneGeometry.texCoordsCompressed}, increments {@link SceneGeometry.version}
+   * and dispatches {@link SceneEvents.onSceneGeometryUpdated} for in-place upload.
+   * Mutating the returned array alone does not notify renderers.
+   */
+  get uvsCompressed() {
+    return this._uvsCompressed;
+  }
+  set uvsCompressed(uvsCompressed) {
+    if (!this.scene.assets.assertMutable(this).ok) return;
+    let error;
+    let type = 2 /* InvalidInput */;
+    if (this.destroyed) {
+      error = "SceneGeometry already destroyed";
+      type = 1 /* InvalidOperation */;
+    } else if (this.updateMode !== "dynamic") {
+      error = 'The geometry must use updateMode: "dynamic".';
+      type = 1 /* InvalidOperation */;
+    } else if (!this._uvsCompressed) {
+      error = "Cannot assign UVs to geometry that was created without UVs.";
+      type = 1 /* InvalidOperation */;
+    } else if (!uvsCompressed || uvsCompressed.length !== this._uvsCompressed.length) {
+      error = `Expected ${this._uvsCompressed.length} UV components, got ${uvsCompressed?.length ?? 0}.`;
+    } else {
+      for (let i = 0; i < uvsCompressed.length; i++) {
+        if (!Number.isFinite(uvsCompressed[i])) {
+          error = "UV components must be finite.";
+          break;
+        }
+      }
+    }
+    if (error) {
+      this.scene.logError({ ok: false, type, error: `[SceneGeometry.uvsCompressed] ${error}` });
+      return;
+    }
+    this._uvsCompressed = uvsCompressed;
+    this.texCoordsCompressed[0] = uvsCompressed;
+    this.version++;
+    this.lastUpdateFlags = SCENE_GEOMETRY_UPDATE_UVS_COMPRESSED;
+    this.scene.events.onSceneGeometryUpdated.dispatch(this.scene, this);
+  }
+  /**
+   * Indexed texture-coordinate channels, packed as 32-bit floats.
+   *
+   * Channel `0` is equivalent to {@link SceneGeometry.uvsCompressed}.
+   */
+  texCoordsCompressed;
+  /**
+   * Vertex RGBA colors, quantized as 8-bit integers.
+   */
+  colorsCompressed;
+  /**
+   * Vertex normals, octahedral-encoded as pairs of 16-bit unsigned integers.
+   *
+   * When defined, the renderer reads these per-vertex and uses them for
+   * smooth shading; when undefined, fragments derive a flat face normal
+   * from view-space position derivatives.
+   */
+  get normalsCompressed() {
+    return this._normalsCompressed;
+  }
+  /**
+   * Primitive indices.
+   *
+   * This is either an array of 8-bit, 16-bit or 32-bit values.
+   */
+  get indices() {
+    return this._indices;
+  }
+  /**
+   * Edge indices.
+   *
+   * This is either an array of 8-bit, 16-bit or 32-bit values.
+   */
+  edgeIndices;
+  /**
+   * Per-splat scales — 3 floats per splat. Only present for
+   * {@link base!constants.GaussianSplatsPrimitive | GaussianSplatsPrimitive} geometry.
+   */
+  scales;
+  /**
+   * Per-splat rotation quaternions — 4 floats per splat, `xyzw`. Only present for
+   * {@link base!constants.GaussianSplatsPrimitive | GaussianSplatsPrimitive} geometry.
+   */
+  rotations;
+  /**
+   * The count of {@link SceneMesh | SceneMeshes} that reference this SceneGeometry.
+   */
+  numMeshes;
+  /**
+   * True if this SceneGeometry has been destroyed.
+   */
+  destroyed = false;
+  /**
+   * @private
+   */
+  constructor(scene, params, model = null) {
+    this.scene = scene;
+    this.model = model;
+    this.updateMode = params.updateMode ?? model?.updateMode ?? "auto";
+    this.id = params.id;
+    this.uniqueId = scene.assets.identity(this.id, model);
+    this.primitive = params.primitive;
+    this._positionsCompressed = params.positionsCompressed;
+    this.vertexStatesCompressed = params.vertexStatesCompressed ?? params.framesCompressed;
+    this.framesCompressed = params.framesCompressed ?? (params.vertexStatesCompressed?.some((state) => state.time !== void 0) ? params.vertexStatesCompressed : void 0);
+    this.morphTargets = params.morphTargets;
+    this.texCoordsCompressed = normalizeTexCoordsCompressed(params.texCoordsCompressed, params.uvsCompressed);
+    this._uvsCompressed = this.texCoordsCompressed?.[0] ?? params.uvsCompressed;
+    this.colorsCompressed = params.colorsCompressed;
+    this._normalsCompressed = params.normalsCompressed;
+    this._indices = narrowIndexArray(params.indices);
+    this.edgeIndices = narrowIndexArray(params.edgeIndices);
+    this.scales = params.scales;
+    this.rotations = params.rotations;
+    this.aabb = createAABB3Float64(params.aabb);
+    this.numMeshes = 0;
+  }
+  /**
+   * Gets or sets 3D vertex positions, quantized as 16-bit integers.
+   *
+   * Assigning this property is a fixed-topology dynamic update. The new array
+   * must have the same length as the original positions array and the parent
+   * {@link SceneModel} must use `updateMode: "dynamic"`. On success xeokit
+   * bumps {@link SceneGeometry.version} and dispatches
+   * {@link SceneEvents.onSceneGeometryUpdated}; renderers and BVH-backed
+   * picking can then refresh their buffers from the new compressed positions.
+   *
+   * The geometry AABB is not changed by this setter. Quantize replacement
+   * positions against the existing {@link SceneGeometry.aabb}; recreate the
+   * geometry when the dynamic range or topology needs to change.
+   *
+   * This does not regenerate normals or edge indices. Use geometries without
+   * explicit normals for flat derivative-based shading, or recreate geometry
+   * when topology-derived attributes need to change.
+   */
+  get positionsCompressed() {
+    return this._positionsCompressed;
+  }
+  set positionsCompressed(positionsCompressed) {
+    if (!this.scene.assets.assertMutable(this).ok) return;
+    if (this.destroyed) {
+      this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "[SceneGeometry.positionsCompressed] SceneGeometry already destroyed"
+      });
+      return;
+    }
+    if (!positionsCompressed) {
+      this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneGeometry.positionsCompressed] Missing required value."
+      });
+      return;
+    }
+    if (this.updateMode !== "dynamic") {
+      this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: '[SceneGeometry.positionsCompressed] The geometry must use updateMode: "dynamic".'
+      });
+      return;
+    }
+    if (positionsCompressed.length !== this._positionsCompressed.length) {
+      this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneGeometry.positionsCompressed] Expected ${this._positionsCompressed.length} position components, got ${positionsCompressed.length}.`
+      });
+      return;
+    }
+    if (positionsCompressed.length % 3 !== 0) {
+      this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneGeometry.positionsCompressed] Length must be a multiple of 3."
+      });
+      return;
+    }
+    this._positionsCompressed = positionsCompressed;
+    this.version++;
+    this.lastUpdateFlags = SCENE_GEOMETRY_UPDATE_POSITIONS_COMPRESSED;
+    this.scene.events.onSceneGeometryUpdated.dispatch(this.scene, this);
+  }
+  /**
+   * Gets or sets primitive connectivity indices.
+   *
+   * Assigning this property is a fixed-topology dynamic update. The replacement
+   * array must have the same number of indices as the existing array and the
+   * parent {@link SceneModel} must use `updateMode: "dynamic"`. On success
+   * xeokit stores a narrowed copy when possible, bumps
+   * {@link SceneGeometry.version} and dispatches
+   * {@link SceneEvents.onSceneGeometryUpdated}; renderers can then refresh
+   * their DTX/VBO/WebGPU buffers and picking structures from the new
+   * connectivity.
+   *
+   * This does not regenerate normals or edge indices. Use flat
+   * derivative-based shading and omit edge indices for fully dynamic topology,
+   * or recreate geometry when topology-derived attributes need to change.
+   */
+  set indices(indices) {
+    if (!this.scene.assets.assertMutable(this).ok) return;
+    if (this.destroyed) {
+      this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "[SceneGeometry.indices] SceneGeometry already destroyed"
+      });
+      return;
+    }
+    if (this.updateMode !== "dynamic") {
+      this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: '[SceneGeometry.indices] The geometry must use updateMode: "dynamic".'
+      });
+      return;
+    }
+    if (!this._indices) {
+      this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "[SceneGeometry.indices] Cannot assign indices to geometry that was created without indices."
+      });
+      return;
+    }
+    if (!indices) {
+      this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneGeometry.indices] Missing required value."
+      });
+      return;
+    }
+    if (indices.length !== this._indices.length) {
+      this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneGeometry.indices] Expected ${this._indices.length} indices, got ${indices.length}.`
+      });
+      return;
+    }
+    if (this.primitive === LinesPrimitive && indices.length % 2 !== 0) {
+      this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneGeometry.indices] Length must be a multiple of 2 for line geometry."
+      });
+      return;
+    }
+    if ((this.primitive === TrianglesPrimitive || this.primitive === SolidPrimitive || this.primitive === SurfacePrimitive) && indices.length % 3 !== 0) {
+      this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneGeometry.indices] Length must be a multiple of 3 for triangle geometry."
+      });
+      return;
+    }
+    if (this.primitive === PointsPrimitive || this.primitive === GaussianSplatsPrimitive) {
+      this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "[SceneGeometry.indices] Cannot assign indices to point or Gaussian splat geometry."
+      });
+      return;
+    }
+    const vertexCount2 = this._positionsCompressed.length / 3;
+    for (let i = 0, len = indices.length; i < len; i++) {
+      const index = indices[i];
+      if (index < 0 || index >= vertexCount2) {
+        this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneGeometry.indices] Indices out of range of vertex positions."
+        });
+        return;
+      }
+      if (this.uvsCompressed) {
+        const uvCount = this.uvsCompressed.length / 2;
+        if (index >= uvCount) {
+          this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: "[SceneGeometry.indices] Indices out of range of vertex UVs."
+          });
+          return;
+        }
+      }
+    }
+    this._indices = narrowIndexArray(indices);
+    this.version++;
+    this.lastUpdateFlags = SCENE_GEOMETRY_UPDATE_INDICES;
+    this.scene.events.onSceneGeometryUpdated.dispatch(this.scene, this);
+  }
+  /**
+   * Gets or sets octahedral-encoded vertex normals.
+   *
+   * Assigning this property is a fixed-count dynamic update. The replacement
+   * array must have the same length as the existing normal array and the parent
+   * {@link SceneModel} must use `updateMode: "dynamic"`. On success xeokit
+   * bumps {@link SceneGeometry.version} and dispatches
+   * {@link SceneEvents.onSceneGeometryUpdated}; renderers can then refresh
+   * their normal buffers or textures without rebuilding the mesh.
+   *
+   * This does not recalculate normals from positions or indices. Fluid and
+   * surface simulations that need smooth dynamic lighting should update this
+   * alongside {@link SceneGeometry.positionsCompressed}.
+   */
+  set normalsCompressed(normalsCompressed) {
+    if (!this.scene.assets.assertMutable(this).ok) return;
+    if (this.destroyed) {
+      this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "[SceneGeometry.normalsCompressed] SceneGeometry already destroyed"
+      });
+      return;
+    }
+    if (this.updateMode !== "dynamic") {
+      this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: '[SceneGeometry.normalsCompressed] The geometry must use updateMode: "dynamic".'
+      });
+      return;
+    }
+    if (!this._normalsCompressed) {
+      this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "[SceneGeometry.normalsCompressed] Cannot assign normals to geometry that was created without normals."
+      });
+      return;
+    }
+    if (!normalsCompressed) {
+      this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneGeometry.normalsCompressed] Missing required value."
+      });
+      return;
+    }
+    if (normalsCompressed.length !== this._normalsCompressed.length) {
+      this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneGeometry.normalsCompressed] Expected ${this._normalsCompressed.length} normal components, got ${normalsCompressed.length}.`
+      });
+      return;
+    }
+    if (normalsCompressed.length % 2 !== 0) {
+      this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneGeometry.normalsCompressed] Length must be a multiple of 2."
+      });
+      return;
+    }
+    if (normalsCompressed.length / 2 !== this._positionsCompressed.length / 3) {
+      this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneGeometry.normalsCompressed] Normal count must match vertex count."
+      });
+      return;
+    }
+    this._normalsCompressed = normalsCompressed;
+    this.version++;
+    this.lastUpdateFlags = SCENE_GEOMETRY_UPDATE_NORMALS_COMPRESSED;
+    this.scene.events.onSceneGeometryUpdated.dispatch(this.scene, this);
+  }
+  /**
+   * Gets this SceneGeometry as SceneGeometryCompressedParams.
+   */
+  toParams() {
+    if (this.destroyed) {
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "[SceneGeometry.toParams] SceneGeometry already destroyed"
+      });
+    }
+    const params = {
+      id: this.id,
+      primitive: this.primitive,
+      updateMode: this.updateMode,
+      aabb: Array.from(this.aabb),
+      positionsCompressed: Array.from(this.positionsCompressed)
+    };
+    if (this.positionsCompressed) {
+      params.positionsCompressed = Array.from(this.positionsCompressed);
+    }
+    if (this.uvsCompressed) {
+      params.uvsCompressed = Array.from(this.uvsCompressed);
+    }
+    if (this.texCoordsCompressed) {
+      params.texCoordsCompressed = {};
+      for (const key of Object.keys(this.texCoordsCompressed)) {
+        const channel = Number(key);
+        params.texCoordsCompressed[channel] = Array.from(this.texCoordsCompressed[channel]);
+      }
+    }
+    if (this.colorsCompressed) {
+      params.colorsCompressed = Array.from(this.colorsCompressed);
+    }
+    if (this.normalsCompressed) {
+      params.normalsCompressed = Array.from(this.normalsCompressed);
+    }
+    if (this.indices) {
+      params.indices = Array.from(this.indices);
+    }
+    if (this.edgeIndices) {
+      params.edgeIndices = Array.from(this.edgeIndices);
+    }
+    if (this.scales) {
+      params.scales = Array.from(this.scales);
+    }
+    if (this.rotations) {
+      params.rotations = Array.from(this.rotations);
+    }
+    if (this.framesCompressed) {
+      params.framesCompressed = this.framesCompressed.map((frame) => {
+        const frameParams = {
+          ...frame.time !== void 0 ? { time: frame.time } : {},
+          ...frame.id !== void 0 ? { id: frame.id } : {},
+          ...frame.name !== void 0 ? { name: frame.name } : {},
+          aabb: Array.from(frame.aabb),
+          positionsCompressed: Array.from(frame.positionsCompressed)
+        };
+        if (frame.normalsCompressed) {
+          frameParams.normalsCompressed = Array.from(frame.normalsCompressed);
+        }
+        if (frame.uvsCompressed) {
+          frameParams.uvsCompressed = Array.from(frame.uvsCompressed);
+        }
+        return frameParams;
+      });
+    }
+    if (this.vertexStatesCompressed) {
+      params.vertexStatesCompressed = this.vertexStatesCompressed.map((state) => {
+        const stateParams = {
+          ...state.id !== void 0 ? { id: state.id } : {},
+          ...state.name !== void 0 ? { name: state.name } : {},
+          ...state.time !== void 0 ? { time: state.time } : {},
+          aabb: Array.from(state.aabb),
+          positionsCompressed: Array.from(state.positionsCompressed)
+        };
+        if (state.normalsCompressed) {
+          stateParams.normalsCompressed = Array.from(state.normalsCompressed);
+        }
+        if (state.uvsCompressed) {
+          stateParams.uvsCompressed = Array.from(state.uvsCompressed);
+        }
+        return stateParams;
+      });
+    }
+    if (this.morphTargets) {
+      params.morphTargets = this.morphTargets.map((target) => ({
+        ...target.id !== void 0 ? { id: target.id } : {},
+        ...target.name !== void 0 ? { name: target.name } : {},
+        ...target.positions !== void 0 ? { positions: Array.from(target.positions) } : {},
+        ...target.normals !== void 0 ? { normals: Array.from(target.normals) } : {},
+        ...target.uvs !== void 0 ? { uvs: Array.from(target.uvs) } : {}
+      }));
+    }
+    return {
+      ok: true,
+      value: params
+    };
+  }
+  /**
+   * Destroys this SceneGeometry.
+   */
+  /**
+   * @internal Releases creation ownership while preserving adopted resources.
+   */
+  _destroyForRollback() {
+    return this.scene.assets.rollbackCreation(this);
+  }
+  destroy() {
+    if (this.destroyed) {
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "[SceneGeometry.destroy] SceneGeometry already destroyed"
+      });
+    }
+    if (this.numMeshes > 0) {
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: `[SceneGeometry.destroy] Cannot destroy SceneGeometry ${this.id} - SceneGeometry is currently used by at least one SceneMesh, which you need to destroy first`
+      });
+    }
+    const allowed = this.scene.assets.canDestroy(this);
+    if (!allowed.ok) return allowed;
+    this.scene.assets.remove(this);
+    this.destroyed = true;
+    return {
+      ok: true,
+      value: void 0
+    };
+  }
+};
+function normalizeTexCoordsCompressed(texCoordsCompressed, uvsCompressed) {
+  const normalized = {};
+  if (texCoordsCompressed) {
+    for (const key of Object.keys(texCoordsCompressed)) {
+      const channel = Number(key);
+      if (Number.isInteger(channel) && channel >= 0 && texCoordsCompressed[channel]) {
+        normalized[channel] = texCoordsCompressed[channel];
+      }
+    }
+  }
+  if (uvsCompressed) {
+    normalized[0] = uvsCompressed;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : void 0;
+}
+
+// ../sdk-oct2/src/model/scene/SceneGeometryFactory.ts
+var SceneGeometryFactory = class {
+  constructor(scene, model = null, reference) {
+    this.scene = scene;
+    this.model = model;
+    this.reference = reference;
+  }
+  scene;
+  model;
+  reference;
+  get geometries() {
+    return this.model?.geometries ?? this.scene.geometries;
+  }
+  _assertCanCreate(operation) {
+    if (this.scene.destroyed || this.scene._clearing)
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "Scene is not available"
+      });
+    return this.model?._assertCanCreate(operation) ?? null;
+  }
+  createGeometry(geometryParams) {
+    const createError = this._assertCanCreate("createGeometry");
+    if (createError) {
+      return createError;
+    }
+    if (!geometryParams) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createGeometry] Missing required 'geometryParams'."
+      });
+    }
+    const { id, positions, indices, primitive, uvs, colors, normals, frames, vertexStates, morphTargets } = geometryParams;
+    const sourceVertexStates = vertexStates ?? frames;
+    const basePositions = positions ?? sourceVertexStates?.[0]?.positions;
+    const baseNormals = normals ?? sourceVertexStates?.[0]?.normals;
+    if (id === null || id === void 0) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createGeometry] Missing required 'id' in geometryParams."
+      });
+    }
+    if (this.geometries[id]) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createGeometry] A geometry with ID '${id}' already exists in this SceneModel.`
+      });
+    }
+    if (!basePositions) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createGeometry] Missing required 'positions' or 'frames[0].positions' in geometryParams."
+      });
+    }
+    if (basePositions.length === 0) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createGeometry] Geometry positions cannot be empty."
+      });
+    }
+    if (basePositions.length % 3 !== 0) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createGeometry] The length of geometry positions must be a multiple of 3."
+      });
+    }
+    const numberError = validateGeometryNumbers(geometryParams, basePositions.length / 3);
+    if (numberError)
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createGeometry] ${numberError}`
+      });
+    if (sourceVertexStates) {
+      if (sourceVertexStates.length === 0) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneModel.createGeometry] 'vertexStates' cannot be empty."
+        });
+      }
+      for (let i = 0, len = sourceVertexStates.length; i < len; i++) {
+        const frame = sourceVertexStates[i];
+        if (!frame.positions) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometry] Missing required 'positions' in vertexStates[${i}].`
+          });
+        }
+        if (frames && !Number.isFinite(frame.time)) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometry] Invalid time in frames[${i}].`
+          });
+        }
+        if (frames && i > 0 && frame.time <= sourceVertexStates[i - 1].time) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: "[SceneModel.createGeometry] Frame times must be strictly increasing."
+          });
+        }
+        if (frame.positions.length !== basePositions.length) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometry] Mismatch between base positions and frames[${i}].positions`
+          });
+        }
+        if (frame.positions.length % 3 !== 0) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometry] The length of frames[${i}].positions must be a multiple of 3.`
+          });
+        }
+        if (frame.normals && frame.normals.length !== frame.positions.length) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometry] Mismatch between given quantities of positions and normals in frames[${i}]`
+          });
+        }
+      }
+    }
+    if (morphTargets) {
+      const uvError = validateMorphTargetUVs(
+        morphTargets,
+        uvs ?? geometryParams.texCoords?.[0],
+        basePositions.length / 3
+      );
+      if (uvError)
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createGeometry] ${uvError}`
+        });
+      for (let i = 0; i < morphTargets.length; i++) {
+        const target = morphTargets[i];
+        if (target.positions && target.positions.length !== basePositions.length) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometry] morphTargets[${i}].positions length must match base positions.`
+          });
+        }
+        if (target.normals && target.normals.length !== basePositions.length) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometry] morphTargets[${i}].normals length must match base positions.`
+          });
+        }
+      }
+    }
+    if (primitive !== PointsPrimitive && primitive !== GaussianSplatsPrimitive && (!indices || indices.length === 0)) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createGeometry] Missing/empty required 'indices' for the specified primitive type."
+      });
+    }
+    if (primitive !== PointsPrimitive && primitive !== LinesPrimitive && primitive !== TrianglesPrimitive && primitive !== SolidPrimitive && primitive !== SurfacePrimitive && primitive !== GaussianSplatsPrimitive) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createGeometry] Unsupported value for geometryParams.primitive: '${primitive}' - supported values are PointsPrimitive, LinesPrimitive, TrianglesPrimitive, SolidPrimitive, SurfacePrimitive and GaussianSplatsPrimitive`
+      });
+    }
+    if (colors && colors.length > 0) {
+      if (colors.length / 4 !== basePositions.length / 3) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneModel.createGeometry] Mismatch between given quantities of vertex positions and colors"
+        });
+      }
+    }
+    if (uvs && uvs.length > 0) {
+      if (uvs.length / 2 !== basePositions.length / 3) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneModel.createGeometry] Mismatch between given quantities of vertex positions and UVs"
+        });
+      }
+    }
+    if (baseNormals && baseNormals.length > 0) {
+      if (baseNormals.length !== basePositions.length) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneModel.createGeometry] Mismatch between given quantities of vertex positions and normals"
+        });
+      }
+    }
+    if (indices) {
+      const lastPositionsIdx = basePositions.length / 3;
+      for (let i = 0, len = indices.length; i < len; i++) {
+        const idx = indices[i];
+        if (idx < 0 || idx >= lastPositionsIdx) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: "[SceneModel.createGeometry] Indices out of range of vertex positions"
+          });
+        }
+        if (uvs) {
+          const lastUVsIdx = uvs.length / 2;
+          if (idx < 0 || idx >= lastUVsIdx) {
+            return this.scene.logError({
+              ok: false,
+              type: 2 /* InvalidInput */,
+              error: "[SceneModel.createGeometry] Indices out of range of vertex UVs"
+            });
+          }
+        }
+      }
+    }
+    const sceneGeometry = new SceneGeometry(
+      this.scene,
+      {
+        ...compressGeometryParams(geometryParams),
+        updateMode: geometryParams.updateMode ?? this.model?.updateMode
+      },
+      this.model
+    );
+    return this.scene.assets.register("geometries", sceneGeometry, this.model, this.reference);
+  }
+  createGeometryCompressed(geometryCompressedParams) {
+    const createError = this._assertCanCreate("createGeometryCompressed");
+    if (createError) {
+      return createError;
+    }
+    if (!geometryCompressedParams) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createGeometryCompressed] Parameters expected: geometryCompressedParams"
+      });
+    }
+    const {
+      id,
+      indices,
+      primitive,
+      positionsCompressed: inputPositionsCompressed,
+      uvsCompressed,
+      texCoordsCompressed,
+      normalsCompressed,
+      colorsCompressed,
+      aabb: inputAABB,
+      framesCompressed,
+      vertexStatesCompressed,
+      morphTargets,
+      scales,
+      rotations
+    } = geometryCompressedParams;
+    const sourceVertexStatesCompressed = vertexStatesCompressed ?? framesCompressed;
+    const positionsCompressed = inputPositionsCompressed ?? sourceVertexStatesCompressed?.[0]?.positionsCompressed;
+    const aabb = inputAABB ?? sourceVertexStatesCompressed?.[0]?.aabb;
+    if (id === null || id === void 0) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createGeometryCompressed] Parameter expected: 'id'"
+      });
+    }
+    if (!positionsCompressed) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createGeometryCompressed] Parameter expected: 'positionsCompressed' or 'framesCompressed[0].positionsCompressed'"
+      });
+    }
+    if (positionsCompressed.length === 0) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createGeometryCompressed] 'positionsCompressed' cannot be empty."
+      });
+    }
+    if (positionsCompressed.length % 3 !== 0) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createGeometryCompressed] The length of 'positionsCompressed' must be a multiple of 3."
+      });
+    }
+    if (primitive !== PointsPrimitive && primitive !== LinesPrimitive && primitive !== TrianglesPrimitive && primitive !== SolidPrimitive && primitive !== SurfacePrimitive && primitive !== GaussianSplatsPrimitive) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createGeometryCompressed] Unsupported value for parameter 'primitive': '${primitive}' - supported values are PointsPrimitive, LinesPrimitive, TrianglesPrimitive, SolidPrimitive, SurfacePrimitive and GaussianSplatsPrimitive`
+      });
+    }
+    if (!aabb || aabb.length !== 6) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createGeometryCompressed] Parameter expected: 'aabb' with six elements."
+      });
+    }
+    const numberError = validateGeometryNumbers(geometryCompressedParams, positionsCompressed.length / 3);
+    if (numberError)
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createGeometry] ${numberError}`
+      });
+    if (!inputPositionsCompressed) {
+      geometryCompressedParams.positionsCompressed = positionsCompressed;
+    }
+    if (!inputAABB) {
+      geometryCompressedParams.aabb = aabb;
+    }
+    if (sourceVertexStatesCompressed) {
+      if (sourceVertexStatesCompressed.length === 0) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneModel.createGeometryCompressed] 'framesCompressed' cannot be empty."
+        });
+      }
+      for (let i = 0, len = sourceVertexStatesCompressed.length; i < len; i++) {
+        const frame = sourceVertexStatesCompressed[i];
+        if (!frame.positionsCompressed) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometryCompressed] Missing required 'positionsCompressed' in framesCompressed[${i}].`
+          });
+        }
+        if (framesCompressed && !Number.isFinite(frame.time)) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometryCompressed] Invalid time in framesCompressed[${i}].`
+          });
+        }
+        if (framesCompressed && i > 0 && frame.time <= sourceVertexStatesCompressed[i - 1].time) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: "[SceneModel.createGeometryCompressed] Frame times must be strictly increasing."
+          });
+        }
+        if (frame.positionsCompressed.length !== positionsCompressed.length) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometryCompressed] Mismatch between base positions and framesCompressed[${i}].positionsCompressed`
+          });
+        }
+        if (frame.positionsCompressed.length % 3 !== 0) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometryCompressed] The length of framesCompressed[${i}].positionsCompressed must be a multiple of 3.`
+          });
+        }
+        if (!frame.aabb || frame.aabb.length !== 6) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometryCompressed] Parameter expected: 'aabb' with six elements in framesCompressed[${i}].`
+          });
+        }
+        if (frame.normalsCompressed && frame.normalsCompressed.length / 2 !== frame.positionsCompressed.length / 3) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and normals in framesCompressed[${i}]`
+          });
+        }
+        if (frame.uvsCompressed && frame.uvsCompressed.length / 2 !== frame.positionsCompressed.length / 3) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and UVs in framesCompressed[${i}]`
+          });
+        }
+      }
+    }
+    if (morphTargets) {
+      const vertexCount2 = positionsCompressed.length / 3;
+      const uvError = validateMorphTargetUVs(morphTargets, uvsCompressed ?? texCoordsCompressed?.[0], vertexCount2);
+      if (uvError)
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: `[SceneModel.createGeometryCompressed] ${uvError}`
+        });
+      for (let i = 0; i < morphTargets.length; i++) {
+        const target = morphTargets[i];
+        if (target.positions && target.positions.length !== positionsCompressed.length) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometryCompressed] morphTargets[${i}].positions length must match base positions.`
+          });
+        }
+        if (target.normals && target.normals.length !== vertexCount2 * 3) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometryCompressed] morphTargets[${i}].normals length must match vertex count * 3.`
+          });
+        }
+      }
+    }
+    if ((!indices || indices.length === 0) && primitive !== PointsPrimitive && primitive !== GaussianSplatsPrimitive) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "[SceneModel.createGeometryCompressed] Missing expected 'indices' for the specified primitive type."
+      });
+    }
+    if (indices) {
+      if (primitive === LinesPrimitive && indices.length % 2 !== 0) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneModel.createGeometryCompressed] The length of 'indices' must be a multiple of 2 for line geometry."
+        });
+      }
+      if ((primitive === TrianglesPrimitive || primitive === SolidPrimitive || primitive === SurfacePrimitive) && indices.length % 3 !== 0) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneModel.createGeometryCompressed] The length of 'indices' must be a multiple of 3 for triangle geometry."
+        });
+      }
+    }
+    const numVertices = positionsCompressed.length / 3;
+    if (colorsCompressed) {
+      if (colorsCompressed.length / 4 !== numVertices) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and colors"
+        });
+      }
+    }
+    if (uvsCompressed) {
+      if (uvsCompressed.length / 2 !== numVertices) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and UVs"
+        });
+      }
+    }
+    if (texCoordsCompressed) {
+      for (const key of Object.keys(texCoordsCompressed)) {
+        const channel = Number(key);
+        const texCoords = texCoordsCompressed[channel];
+        if (!Number.isInteger(channel) || channel < 0) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: "[SceneModel.createGeometryCompressed] Texture-coordinate channel indices must be non-negative integers"
+          });
+        }
+        if (texCoords && texCoords.length / 2 !== numVertices) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: `[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and texture-coordinate channel ${channel}`
+          });
+        }
+      }
+    }
+    if (normalsCompressed) {
+      if (normalsCompressed.length / 2 !== numVertices) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and normals"
+        });
+      }
+    }
+    if (scales) {
+      if (scales.length / 3 !== numVertices) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and splat scales"
+        });
+      }
+    }
+    if (rotations) {
+      if (rotations.length / 4 !== numVertices) {
+        return this.scene.logError({
+          ok: false,
+          type: 2 /* InvalidInput */,
+          error: "[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and splat rotations"
+        });
+      }
+    }
+    if (indices) {
+      const lastPositionsIdx = numVertices;
+      for (let i = 0, len = indices.length; i < len; i++) {
+        const idx = indices[i];
+        if (idx < 0 || idx >= lastPositionsIdx) {
+          return this.scene.logError({
+            ok: false,
+            type: 2 /* InvalidInput */,
+            error: "[SceneModel.createGeometryCompressed] Indices out of range of vertex positions"
+          });
+        }
+        if (uvsCompressed) {
+          const lastUVsIdx = uvsCompressed.length / 2;
+          if (idx < 0 || idx >= lastUVsIdx) {
+            return this.scene.logError({
+              ok: false,
+              type: 2 /* InvalidInput */,
+              error: "[SceneModel.createGeometryCompressed] Indices out of range of vertex UVs"
+            });
+          }
+        }
+      }
+    }
+    const geometryId = id;
+    if (this.geometries[geometryId]) {
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: `[SceneModel.createGeometryCompressed] SceneGeometry with this ID already exists: '${geometryId}'`
+      });
+    }
+    const sceneGeometry = new SceneGeometry(
+      this.scene,
+      { ...geometryCompressedParams, updateMode: geometryCompressedParams.updateMode ?? this.model?.updateMode },
+      this.model
+    );
+    return this.scene.assets.register("geometries", sceneGeometry, this.model, this.reference);
   }
 };
 
@@ -83227,6 +85627,15 @@ var SceneTexture = class {
    * The SceneModel that this texture belongs to.
    */
   model;
+  scene;
+  /**
+   * Persistent identity, present only on an immutable library definition.
+   */
+  get externalReference() {
+    return this.scene.assets.reference(this);
+  }
+  uniqueId;
+  materials = /* @__PURE__ */ new Set();
   /**
    * The count of {@link SceneMaterial | SceneMaterials} that
    * reference this SceneTexture (in any of the colour, normals,
@@ -83245,8 +85654,10 @@ var SceneTexture = class {
   /**
    * @private
    */
-  constructor(sceneModel, params) {
+  constructor(scene, params, sceneModel = null) {
+    this.scene = scene;
     this.model = sceneModel;
+    this.uniqueId = scene.assets.identity(params.id, sceneModel);
     this.id = params.id;
     this.src = params.src;
     this.image = params.image;
@@ -83285,7 +85696,7 @@ var SceneTexture = class {
    */
   toParams() {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTexture.toParams] Cannot get params of destroyed SceneTexture '${this.id}'`
@@ -83344,8 +85755,9 @@ var SceneTexture = class {
    * `texture.imageData = texture.imageData`.
    */
   set imageData(value) {
+    if (!this.scene.assets.assertMutable(this).ok) return;
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTexture.imageData] Cannot set imageData on destroyed SceneTexture '${this.id}'`
@@ -83356,7 +85768,7 @@ var SceneTexture = class {
     try {
       normalized = normalizeImageData(value);
     } catch (error) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: `[SceneTexture.imageData] ${error instanceof Error ? error.message : String(error)}`
@@ -83398,8 +85810,10 @@ var SceneTexture = class {
    * ```
    */
   updateImageData(update) {
+    const mutable = this.scene.assets.assertMutable(this);
+    if (!mutable.ok) return mutable;
     if (this.destroyed || !this._imageData) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTexture.updateImageData] Expected a live texture with imageData: '${this.id}'`
@@ -83407,7 +85821,7 @@ var SceneTexture = class {
     }
     const image = this._imageData;
     if (!update || ![update.x, update.y, update.width, update.height].every(Number.isSafeInteger) || update.x < 0 || update.y < 0 || update.width <= 0 || update.height <= 0 || update.x + update.width > image.width || update.y + update.height > image.height || !(update.data instanceof Uint8Array || update.data instanceof Uint8ClampedArray) || update.data.length !== update.width * update.height * 4) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: "[SceneTexture.updateImageData] Expected an in-bounds rectangle with exactly width * height * 4 RGBA bytes"
@@ -83416,10 +85830,7 @@ var SceneTexture = class {
     const bytes = new Uint8ClampedArray(update.data);
     const stride = update.width * 4;
     for (let row = 0; row < update.height; row++) {
-      image.data.set(
-        bytes.subarray(row * stride, (row + 1) * stride),
-        ((update.y + row) * image.width + update.x) * 4
-      );
+      image.data.set(bytes.subarray(row * stride, (row + 1) * stride), ((update.y + row) * image.width + update.x) * 4);
     }
     this._imageChanged(Object.freeze({ x: update.x, y: update.y, width: update.width, height: update.height }));
     return { ok: true, value: void 0 };
@@ -83432,15 +85843,18 @@ var SceneTexture = class {
     this.width = sourceSize.width;
     this.height = sourceSize.height;
     this.textureBytes = estimateTextureBytes(this._imageData || this.image);
-    this.model.stats.textureBytes += this.textureBytes - oldTextureBytes;
-    this.model.scene.events.onSceneTextureImageDataChanged.dispatch(this.model.scene, this);
+    this.scene.assets.textureSizeChanged(this, this.textureBytes - oldTextureBytes);
+    this.scene.events.onSceneTextureImageDataChanged.dispatch(this.scene, this);
   }
-  /** @internal Start browser decoding only after the model has published this texture. */
+  /**
+   * @internal Start browser decoding only after the model has published this texture.
+   */
   _loadImage() {
-    if (this.destroyed || this.model.destroyed || this._imageData || this.image || this.compressed || typeof Image === "undefined" || !this.src && !this.buffers?.length) return;
+    if (this.destroyed || this.scene.destroyed || this._imageData || this.image || this.compressed || typeof Image === "undefined" || !this.src && !this.buffers?.length)
+      return;
     const image = new Image();
     this._pendingImage = image;
-    const current = () => this._pendingImage === image && !this.destroyed && !this.model.destroyed;
+    const current = () => this._pendingImage === image && !this.destroyed && !this.scene.destroyed;
     image.onload = () => {
       if (!current()) return;
       this.image = image;
@@ -83450,7 +85864,7 @@ var SceneTexture = class {
     image.onerror = () => {
       if (!current()) return;
       this._finishImageLoad();
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 3 /* ResourceNotFound */,
         error: `[SceneTexture] Failed to decode image for texture '${this.id}'`
@@ -83494,8 +85908,9 @@ var SceneTexture = class {
     return Array.from(this._uvTransform);
   }
   set uvTransform(value) {
+    if (!this.scene.assets.assertMutable(this).ok) return;
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTexture.uvTransform] Cannot set uvTransform on destroyed SceneTexture '${this.id}'`
@@ -83503,7 +85918,7 @@ var SceneTexture = class {
       return;
     }
     this._uvTransform = normalizeUVTransform(value);
-    this.model.scene.events.onSceneTextureUVTransformChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneTextureUVTransformChanged.dispatch(this.scene, this);
   }
   /**
    * Convenience offset for scrolling this texture's coordinates.
@@ -83515,8 +85930,9 @@ var SceneTexture = class {
     return [this._uvTransform[4], this._uvTransform[5]];
   }
   set uvOffset(value) {
+    if (!this.scene.assets.assertMutable(this).ok) return;
     if (this.destroyed) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTexture.uvOffset] Cannot set uvOffset on destroyed SceneTexture '${this.id}'`
@@ -83526,7 +85942,7 @@ var SceneTexture = class {
     const u = Number(value?.[0]);
     const v = Number(value?.[1]);
     if (!Number.isFinite(u) || !Number.isFinite(v)) {
-      this.model.scene.logError({
+      this.scene.logError({
         ok: false,
         type: 2 /* InvalidInput */,
         error: `[SceneTexture.uvOffset] Expected finite [u, v] offset for SceneTexture '${this.id}'`
@@ -83534,7 +85950,7 @@ var SceneTexture = class {
       return;
     }
     this._uvTransform = [this._uvTransform[0], this._uvTransform[1], this._uvTransform[2], this._uvTransform[3], u, v];
-    this.model.scene.events.onSceneTextureUVTransformChanged.dispatch(this.model.scene, this);
+    this.scene.events.onSceneTextureUVTransformChanged.dispatch(this.scene, this);
   }
   /**
    * Destroy this SceneTexture.
@@ -83545,26 +85961,34 @@ var SceneTexture = class {
    * Destroy or replace those materials first. Mirrors
    * {@link SceneGeometry.destroy} and {@link SceneMaterial.destroy}.
    */
+  /**
+   * @internal Releases creation ownership while preserving adopted resources.
+   */
+  _destroyForRollback() {
+    return this.scene.assets.rollbackCreation(this);
+  }
   destroy() {
     if (this.destroyed) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTexture.destroy] SceneTexture '${this.id}' already destroyed`
       });
     }
     if (this.numMaterials > 0) {
-      return this.model.scene.logError({
+      return this.scene.logError({
         ok: false,
         type: 1 /* InvalidOperation */,
         error: `[SceneTexture.destroy] Cannot destroy SceneTexture '${this.id}' - still referenced by ${this.numMaterials} SceneMaterial(s), which you need to destroy first`
       });
     }
+    const allowed = this.scene.assets.canDestroy(this);
+    if (!allowed.ok) return allowed;
     this._cancelImageLoad();
     this.image = void 0;
     this._imageData = void 0;
-    this.buffers = void 0;
-    this.model._destroyTexture(this);
+    Object.defineProperty(this, "buffers", { value: void 0, writable: true, enumerable: true, configurable: true });
+    this.scene.assets.remove(this);
     this.destroyed = true;
     return { ok: true, value: void 0 };
   }
@@ -83578,7 +86002,9 @@ function normalizeImageData(input) {
     throw new Error("Expected positive integer pixel dimensions and exactly width * height * 4 RGBA bytes");
   }
   if (typeof ImageData !== "undefined" && input instanceof ImageData) return input;
-  const clamped = buf.data instanceof Uint8ClampedArray ? buf.data : new Uint8ClampedArray(buf.data instanceof Uint8Array ? buf.data.buffer.slice(buf.data.byteOffset, buf.data.byteOffset + buf.data.byteLength) : buf.data);
+  const clamped = buf.data instanceof Uint8ClampedArray ? buf.data : new Uint8ClampedArray(
+    buf.data instanceof Uint8Array ? buf.data.buffer.slice(buf.data.byteOffset, buf.data.byteOffset + buf.data.byteLength) : buf.data
+  );
   return typeof ImageData === "undefined" ? { data: clamped, width: buf.width, height: buf.height } : new ImageData(clamped, buf.width, buf.height);
 }
 function getTextureSize(source) {
@@ -83654,6 +86080,85 @@ function serializeImageToDataURL(image) {
   }
 }
 
+// ../sdk-oct2/src/model/scene/SceneAssetFactory.ts
+var TEXTURE_SLOTS = ["color", "metallicRoughness", "normals", "occlusion", "emissive"];
+var SceneAssetFactory = class {
+  constructor(scene, model = null, reference) {
+    this.scene = scene;
+    this.model = model;
+    this.reference = reference;
+    this.geometry = new SceneGeometryFactory(scene, model, reference);
+  }
+  scene;
+  model;
+  reference;
+  geometry;
+  createTexture(params) {
+    const error = this.check("textures", params?.id, "createTexture");
+    if (error) return error;
+    if (!params.imageData && !params.image && !params.src && !params.buffers) {
+      return this.failure("createTexture", "Expected imageData, image, src or buffers");
+    }
+    let texture;
+    try {
+      texture = new SceneTexture(this.scene, params, this.model);
+    } catch (cause) {
+      return this.failure("createTexture", cause instanceof Error ? cause.message : String(cause));
+    }
+    const result = this.scene.assets.register("textures", texture, this.model, this.reference);
+    if (result.ok) texture._loadImage();
+    return result;
+  }
+  createMaterial(params) {
+    const error = this.check("materials", params?.id, "createMaterial");
+    if (error) return error;
+    const textures = {};
+    for (const slot of TEXTURE_SLOTS) {
+      const id = params[`${slot}TextureId`];
+      if (id === void 0 || id === null) continue;
+      const texture = (this.model?.textures ?? this.scene.textures)[id];
+      if (!texture || texture.destroyed)
+        return this.failure("createMaterial", `Texture '${id}' is not bound in this scope`);
+      textures[`${slot}Texture`] = texture;
+    }
+    const material = new SceneMaterial(this.scene, params, textures, this.model);
+    for (const texture of Object.values(textures)) {
+      texture.numMaterials++;
+      texture.materials.add(material);
+    }
+    return this.scene.assets.register("materials", material, this.model, this.reference);
+  }
+  check(kind, id, operation) {
+    if (this.scene.destroyed || this.scene._clearing) return this.failure(operation, "Scene is not available");
+    const error = this.model?._assertCanCreate(operation, true);
+    if (error) return error;
+    if (typeof id !== "string" || !id) return this.failure(operation, "Expected a nonempty ID");
+    if (this.model?.[kind][id] || this.scene[kind][this.scene.assets.identity(id, this.model)]) {
+      return this.failure(operation, `Resource '${id}' already exists`);
+    }
+    return null;
+  }
+  failure(operation, error) {
+    return this.scene.logError({ ok: false, type: 2 /* InvalidInput */, error: `[Scene.${operation}] ${error}` });
+  }
+};
+
+// ../sdk-oct2/src/model/scene/internal/rollbackCreatedComponents.ts
+function rollbackCreatedComponents(components) {
+  const errors = [];
+  for (let i = components.length - 1; i >= 0; i--) {
+    const component = components[i];
+    if (component.destroyed) continue;
+    try {
+      const result = component._destroyForRollback?.() ?? component.destroy();
+      if (result?.ok === false) errors.push(result.error);
+    } catch (error) {
+      errors.push(String(error));
+    }
+  }
+  return errors.length ? { ok: false, type: 1 /* InvalidOperation */, error: `Rollback failed: ${errors.join("; ")}` } : { ok: true, value: void 0 };
+}
+
 // ../sdk-oct2/src/model/scene/SceneModelBatch.ts
 var SceneModelBatch = class {
   /**
@@ -83720,332 +86225,6 @@ var SceneModelBatch = class {
   }
 };
 
-// ../sdk-oct2/src/model/scene/variant/SceneVariant.ts
-var SceneVariant = class {
-  /**
-   * Variant ID, unique within its variant set.
-   */
-  id;
-  /**
-   * The variant set that contains this variant.
-   */
-  variantSet;
-  /**
-   * SceneObject IDs included in this variant.
-   */
-  objectIds;
-  /**
-   * Optional projected-size selection hint.
-   */
-  range;
-  /**
-   * @private
-   */
-  constructor(variantSet, params) {
-    this.variantSet = variantSet;
-    this.id = params.id;
-    this.objectIds = params.objectIds.slice();
-    this.range = params.range ? { ...params.range } : void 0;
-  }
-  /**
-   * Gets this variant as parameters.
-   */
-  toParams() {
-    return {
-      id: this.id,
-      objectIds: this.objectIds.slice(),
-      range: this.range ? { ...this.range } : void 0
-    };
-  }
-};
-
-// ../sdk-oct2/src/model/scene/variant/SceneVariantSet.ts
-var SceneVariantSet = class {
-  /**
-   * Variant set ID, unique within its SceneModel.
-   */
-  id;
-  /**
-   * SceneModel that owns this variant set.
-   */
-  model;
-  /**
-   * Variants in this variant set, keyed by variant ID.
-   */
-  variants = {};
-  /**
-   * ID of the default variant.
-   */
-  defaultVariantId;
-  /**
-   * Optional declarative selection metadata.
-   */
-  selection;
-  /**
-   * True after this variant set has been destroyed.
-   */
-  destroyed = false;
-  /**
-   * @private
-   */
-  constructor(model, params) {
-    this.model = model;
-    this.id = params.id;
-    this.defaultVariantId = params.defaultVariantId;
-    this.selection = params.selection ? { ...params.selection } : void 0;
-    for (let i = 0, len = params.variants.length; i < len; i++) {
-      const variant = new SceneVariant(this, params.variants[i]);
-      this.variants[variant.id] = variant;
-    }
-  }
-  /**
-   * Gets the default variant.
-   */
-  get defaultVariant() {
-    return this.variants[this.defaultVariantId];
-  }
-  /**
-   * Gets this variant set as parameters.
-   */
-  toParams() {
-    return {
-      id: this.id,
-      defaultVariantId: this.defaultVariantId,
-      selection: this.selection ? { ...this.selection } : void 0,
-      variants: Object.keys(this.variants).map((id) => this.variants[id].toParams())
-    };
-  }
-  /**
-   * Destroys this variant set.
-   *
-   * Referenced SceneObjects are not destroyed.
-   */
-  destroy() {
-    if (this.destroyed) {
-      return this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: "[SceneVariantSet.destroy] SceneVariantSet already destroyed"
-      });
-    }
-    this.model._destroyVariantSet(this);
-    this.destroyed = true;
-    return {
-      ok: true,
-      value: void 0
-    };
-  }
-};
-
-// ../sdk-oct2/src/model/scene/animation/SceneAnimation.ts
-function cloneNumberArray(values2) {
-  return Array.from(values2);
-}
-function validateSampler(target, sampler) {
-  if (!sampler) {
-    return "Missing sampler.";
-  }
-  const times = sampler.times;
-  const values2 = sampler.values;
-  if (!times || times.length === 0) {
-    return "Sampler times must contain at least one time.";
-  }
-  if (!values2 || values2.length === 0) {
-    return "Sampler values must contain at least one value.";
-  }
-  for (let i = 0; i < times.length; i++) {
-    if (!Number.isFinite(times[i])) {
-      return `Sampler time at index ${i} is not finite.`;
-    }
-    if (i > 0 && times[i] <= times[i - 1]) {
-      return "Sampler times must be strictly increasing.";
-    }
-  }
-  const interpolation = sampler.interpolation ?? "LINEAR";
-  if (interpolation !== "STEP" && interpolation !== "LINEAR") {
-    return `Unsupported interpolation '${interpolation}'.`;
-  }
-  let valueSize;
-  if (target.type === "material") {
-    valueSize = 3;
-  } else if (target.type === "transform") {
-    valueSize = target.property === "rotation" ? 4 : 3;
-  } else if (target.type === "vertexState") {
-    valueSize = 1;
-  } else {
-    if (!Number.isInteger(sampler.valueSize) || sampler.valueSize <= 0) {
-      return "Morph-weight sampler requires a positive integer valueSize.";
-    }
-    valueSize = sampler.valueSize;
-  }
-  if (values2.length !== times.length * valueSize) {
-    return `Sampler values length must be times.length * ${valueSize}.`;
-  }
-  for (let i = 0; i < values2.length; i++) {
-    if (!Number.isFinite(values2[i])) {
-      return `Sampler value at index ${i} is not finite.`;
-    }
-    if (target.type === "material") {
-      if (target.property === "color" && (values2[i] < 0 || values2[i] > 1)) return "Material color animation factors must be in [0,1].";
-      if (target.property === "emissiveColor" && (values2[i] < 0 || !Number.isFinite(Math.fround(values2[i])))) return "Material emission animation factors must be non-negative finite float32 values.";
-    }
-    if (target.type === "vertexState" && (!Number.isInteger(values2[i]) || values2[i] < 0)) {
-      return `Vertex-state sampler value at index ${i} must be a non-negative integer state index.`;
-    }
-  }
-  if (target.type === "transform" && target.property === "rotation") {
-    for (let i = 0; i < values2.length; i += 4) {
-      if (Math.max(Math.abs(values2[i]), Math.abs(values2[i + 1]), Math.abs(values2[i + 2]), Math.abs(values2[i + 3])) === 0) {
-        return `Rotation sample at index ${i / 4} must be a non-zero quaternion.`;
-      }
-    }
-  }
-  return null;
-}
-function validateTarget(target) {
-  if (!target) {
-    return "Missing channel target.";
-  }
-  if (target.type === "material") {
-    if (!target.materialId) return "Material animation requires target.materialId.";
-    if (target.property !== "color" && target.property !== "emissiveColor") return "Unsupported material animation property.";
-    return null;
-  }
-  if (target.type === "vertexState") {
-    if (!target.meshId) {
-      return "Vertex-state animation target requires target.meshId.";
-    }
-    return null;
-  }
-  if (target.type === "morphWeights") {
-    if (!target.meshId) {
-      return "Morph-weight animation target requires target.meshId.";
-    }
-    return null;
-  }
-  if (target.type !== "transform") {
-    return `Unsupported animation target type '${target.type}'.`;
-  }
-  if (!target.transformId) {
-    return "Transform animation target requires target.transformId.";
-  }
-  if (target.property !== "translation" && target.property !== "rotation" && target.property !== "scale") {
-    return `Unsupported transform animation property '${target.property}'.`;
-  }
-  return null;
-}
-function cloneChannel(channel) {
-  const times = Object.freeze(cloneNumberArray(channel.sampler.times));
-  const values2 = Object.freeze(cloneNumberArray(channel.sampler.values));
-  return Object.freeze({
-    target: Object.freeze({ ...channel.target }),
-    sampler: Object.freeze({
-      times,
-      values: values2,
-      ...channel.sampler.valueSize !== void 0 ? { valueSize: channel.sampler.valueSize } : {},
-      interpolation: channel.sampler.interpolation ?? "LINEAR"
-    })
-  });
-}
-var SceneAnimation = class {
-  id;
-  name;
-  model;
-  channels;
-  destroyed = false;
-  constructor(model, params) {
-    this.model = model;
-    this.id = params.id;
-    this.name = params.name;
-    this.channels = Object.freeze(params.channels.map(cloneChannel));
-  }
-  get startTime() {
-    let startTime = Infinity;
-    for (const channel of this.channels) {
-      startTime = Math.min(startTime, channel.sampler.times[0]);
-    }
-    return startTime === Infinity ? 0 : startTime;
-  }
-  /**
-   * Last authored sample time across all channels.
-   */
-  get endTime() {
-    let endTime = -Infinity;
-    for (const channel of this.channels) {
-      const times = channel.sampler.times;
-      endTime = Math.max(endTime, times[times.length - 1]);
-    }
-    return endTime === -Infinity ? 0 : endTime;
-  }
-  /**
-   * Difference between the first and last authored sample times.
-   */
-  get duration() {
-    return Math.max(0, this.endTime - this.startTime);
-  }
-  /**
-   * Serializes this immutable animation asset back to JSON-friendly params.
-   */
-  toParams() {
-    if (this.destroyed) {
-      return this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: `[SceneAnimation.toParams] Cannot serialize destroyed SceneAnimation ${this.id}`
-      });
-    }
-    return {
-      ok: true,
-      value: {
-        id: this.id,
-        ...this.name !== void 0 ? { name: this.name } : {},
-        channels: this.channels.map(cloneChannel)
-      }
-    };
-  }
-  /**
-   * Removes this animation from its owning SceneModel.
-   */
-  destroy() {
-    if (this.destroyed) {
-      return this.model.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: `[SceneAnimation.destroy] SceneAnimation ${this.id} already destroyed`
-      });
-    }
-    this.model._destroyAnimation(this);
-    this.destroyed = true;
-    return { ok: true, value: void 0 };
-  }
-  /**
-   * Validates animation params without creating a SceneAnimation.
-   */
-  static validateParams(params) {
-    if (!params) {
-      return "Missing SceneAnimationParams.";
-    }
-    if (!params.id) {
-      return "SceneAnimationParams.id is required.";
-    }
-    if (!params.channels || !Array.isArray(params.channels)) {
-      return "SceneAnimationParams.channels must be an array.";
-    }
-    for (let i = 0; i < params.channels.length; i++) {
-      const channel = params.channels[i];
-      const targetError = validateTarget(channel?.target);
-      if (targetError) {
-        return `Channel ${i}: ${targetError}`;
-      }
-      const samplerError = validateSampler(channel.target, channel.sampler);
-      if (samplerError) {
-        return `Channel ${i}: ${samplerError}`;
-      }
-    }
-    return null;
-  }
-};
-
 // ../sdk-oct2/src/model/scene/animation/interpolation/interpolateQuaternion.ts
 function readQuaternionSample(values2, sample, dest = createQuatFloat64()) {
   const offset = sample * 4;
@@ -84058,12 +86237,6 @@ function readQuaternionSample(values2, sample, dest = createQuatFloat64()) {
 }
 
 // ../sdk-oct2/src/model/scene/SceneModel.ts
-var COLOR_TEXTURE = 0;
-var METALLIC_ROUGHNESS_TEXTURE = 1;
-var NORMALS_TEXTURE = 2;
-var EMISSIVE_TEXTURE = 3;
-var OCCLUSION_TEXTURE = 4;
-var TEXTURE_ENCODING_OPTIONS = {};
 function normalizeLoadingMode(loadingMode) {
   return loadingMode === "streaming" ? loadingMode : "open";
 }
@@ -84073,197 +86246,56 @@ function paramsRequestSeal(params) {
 function normalizeUpdateMode(updateMode) {
   return updateMode === "static" || updateMode === "dynamic" ? updateMode : "auto";
 }
-TEXTURE_ENCODING_OPTIONS[COLOR_TEXTURE] = {
-  useSRGB: true,
-  qualityLevel: 50,
-  encodeUASTC: true,
-  mipmaps: true
-};
-TEXTURE_ENCODING_OPTIONS[EMISSIVE_TEXTURE] = {
-  useSRGB: true,
-  encodeUASTC: true,
-  qualityLevel: 10,
-  mipmaps: false
-};
-TEXTURE_ENCODING_OPTIONS[METALLIC_ROUGHNESS_TEXTURE] = {
-  useSRGB: false,
-  encodeUASTC: true,
-  qualityLevel: 50,
-  mipmaps: true
-  // Needed for GGX roughness shading
-};
-TEXTURE_ENCODING_OPTIONS[NORMALS_TEXTURE] = {
-  useSRGB: false,
-  encodeUASTC: true,
-  qualityLevel: 10,
-  mipmaps: false
-};
-TEXTURE_ENCODING_OPTIONS[OCCLUSION_TEXTURE] = {
-  useSRGB: false,
-  encodeUASTC: true,
-  qualityLevel: 10,
-  mipmaps: false
-};
 var SceneModel = class {
-  /** Model-owned numerical payloads, indexed by resource ID. Mutate through the methods below. */
+  source;
+  _assetFactory;
+  _instanceFactory;
+  _definitions;
+  behaviors;
+  /**
+   * Binds an existing scene resource to a document-local name. Explicit bindings
+   * prevent unrelated library resources from capturing an imported local ID.
+   */
+  bindGeometry(geometry, alias = geometry.id) {
+    return this.scene.assets.bind(this, "geometries", alias, geometry);
+  }
+  bindMaterial(material, alias = material.id) {
+    return this.scene.assets.bind(this, "materials", alias, material);
+  }
+  bindTexture(texture, alias = texture.id) {
+    return this.scene.assets.bind(this, "textures", alias, texture);
+  }
+  /**
+   * Model-owned numerical payloads, indexed by resource ID. Mutate through the methods below.
+   */
   dataResources = /* @__PURE__ */ Object.create(null);
-  /** Portable semantic definitions, indexed by representation ID; contains no executable consumers. */
+  /**
+   * Portable semantic definitions, indexed by representation ID; contains no executable consumers.
+   */
   representations = /* @__PURE__ */ Object.create(null);
-  /**
-   * Copies and registers a numerical payload in this model.
-   *
-   * @param params Buffer or 2D table with a unique model-local ID and matching typed array.
-   * @returns The model-owned resource, or InvalidInput without publishing partial data.
-   */
   createDataResource(params) {
-    const blocked = this._assertCanCreate("createDataResource");
-    if (blocked) return blocked;
-    try {
-      if (this.dataResources[params.id]) throw new Error(`Resource already exists: ${params.id}`);
-      const resource = new SceneDataResource(this, params);
-      for (const representation of Object.values(this.representations)) {
-        if (Object.values(representation.resources).includes(resource.id)) {
-          this._checkRepresentation(representation.toParams(), resource);
-        }
-      }
-      this.dataResources[resource.id] = resource;
-      this._activeBatch?.dataResources.push(resource);
-      this.scene.events.onSceneDataResourceChanged.dispatch(this.scene, this);
-      return { ok: true, value: resource };
-    } catch (error) {
-      return { ok: false, type: 2 /* InvalidInput */, error: String(error) };
-    }
+    return this._definitions.createDataResource(params);
   }
-  /**
-   * Atomically replaces values while preserving resource identity and layout.
-   * Known referring schemas validate the replacement before revision/event updates.
-   *
-   * @param id Existing resource ID in this model.
-   * @param update Complete replacement typed array; copied, with layout unchanged.
-   * @returns Success, or a validation/missing-resource error with the old values intact.
-   */
   updateDataResource(id, update) {
-    const resource = this.dataResources[id];
-    if (this.destroyed || !resource) return { ok: false, type: 2 /* InvalidInput */, error: `Resource not found: ${id}` };
-    try {
-      const candidate = new SceneDataResource(this, { ...resource.descriptor, data: update.data });
-      for (const representation of Object.values(this.representations)) {
-        if (Object.values(representation.resources).includes(id)) this._checkRepresentation(representation.toParams(), candidate);
-      }
-      resource._replaceFrom(candidate);
-      this.scene.events.onSceneDataResourceChanged.dispatch(this.scene, this);
-      return { ok: true, value: void 0 };
-    } catch (error) {
-      return { ok: false, type: 2 /* InvalidInput */, error: String(error) };
-    }
+    return this._definitions.updateDataResource(id, update);
   }
-  /**
-   * Removes an unreferenced numerical resource and notifies consumers.
-   * @param id Model-local resource ID.
-   * @returns InvalidOperation if missing or still referenced by any representation.
-   */
   destroyDataResource(id) {
-    const resource = this.dataResources[id];
-    if (!resource || Object.values(this.representations).some((rep) => Object.values(rep.resources).includes(id))) {
-      return { ok: false, type: 1 /* InvalidOperation */, error: `Resource missing or still referenced: ${id}` };
-    }
-    delete this.dataResources[id];
-    resource.destroyed = true;
-    this.scene.events.onSceneDataResourceChanged.dispatch(this.scene, this);
-    return { ok: true, value: void 0 };
+    return this._definitions.destroyDataResource(id);
   }
-  /**
-   * Creates a renderer-independent interpretation of scene data.
-   *
-   * Always validates/copies portable structure. Known schemas registered on
-   * scene.representationSchemas additionally validate resolved semantic inputs.
-   * Unknown types, newer schemas and unresolved resource IDs remain preservable.
-   *
-   * @param params Unique ID, semantic type/version, finite JSON, bounds and resource references.
-   * @returns The model-owned definition, or an error without publishing it.
-   */
   createRepresentation(params) {
-    const blocked = this._assertCanCreate("createRepresentation");
-    if (blocked) return blocked;
-    try {
-      if (this.representations[params.id]) throw new Error(`Representation already exists: ${params.id}`);
-      const representation = new SceneRepresentation(this, params);
-      this._checkRepresentation(representation.toParams());
-      this.representations[representation.id] = representation;
-      this._activeBatch?.representations.push(representation);
-      this._representationChanged(representation.id);
-      return { ok: true, value: representation };
-    } catch (error) {
-      return { ok: false, type: 2 /* InvalidInput */, error: String(error) };
-    }
+    return this._definitions.createRepresentation(params);
   }
-  /**
-   * Validates and replaces definition fields atomically, then increments revision.
-   *
-   * @param id Existing model-local definition ID; identity cannot change.
-   * @param update Fields to replace. Parameters/resources are replaced as whole maps, not deep-merged.
-   * @returns Success, or a validation error leaving the previous definition unchanged.
-   */
   updateRepresentation(id, update) {
-    const representation = this.representations[id];
-    if (this.destroyed || !representation) return { ok: false, type: 2 /* InvalidInput */, error: `Representation not found: ${id}` };
-    try {
-      const params = copyRepresentationParams({ ...representation.toParams(), ...update, id });
-      this._checkRepresentation(params);
-      representation._replace(params);
-      this._representationChanged(id);
-      return { ok: true, value: void 0 };
-    } catch (error) {
-      return { ok: false, type: 2 /* InvalidInput */, error: String(error) };
-    }
+    return this._definitions.updateRepresentation(id, update);
   }
-  /**
-   * Removes a definition when no mesh in this model still binds it.
-   * @param id Model-local definition ID.
-   * @returns Success, or InvalidOperation when missing or still bound.
-   */
   destroyRepresentation(id) {
-    const representation = this.representations[id];
-    if (!representation || Object.values(this.meshes).some((mesh) => mesh.representationId === id)) {
-      return { ok: false, type: 1 /* InvalidOperation */, error: `Representation missing or still bound: ${id}` };
-    }
-    delete this.representations[id];
-    representation.destroyed = true;
-    this._representationChanged(id);
-    return { ok: true, value: void 0 };
+    return this._definitions.destroyRepresentation(id);
   }
-  /** Restores forward references to their unresolved state when construction is rolled back. @internal */
   _rollbackDataResource(component) {
-    if (component.destroyed) return { ok: true, value: void 0 };
-    if (this.dataResources[component.id] !== component) {
-      return { ok: false, type: 1 /* InvalidOperation */, error: "Rollback component identity changed" };
-    }
-    delete this.dataResources[component.id];
-    component.destroyed = true;
-    this.scene.events.onSceneDataResourceChanged.dispatch(this.scene, this);
-    return { ok: true, value: void 0 };
+    return this._definitions._rollbackDataResource(component);
   }
-  /** Restores forward references to their unresolved state when construction is rolled back. @internal */
   _rollbackRepresentation(component) {
-    if (component.destroyed) return { ok: true, value: void 0 };
-    if (this.representations[component.id] !== component) {
-      return { ok: false, type: 1 /* InvalidOperation */, error: "Rollback component identity changed" };
-    }
-    delete this.representations[component.id];
-    component.destroyed = true;
-    this._representationChanged(component.id);
-    return { ok: true, value: void 0 };
-  }
-  _checkRepresentation(params, replacement) {
-    const resources = /* @__PURE__ */ Object.create(null);
-    for (const [name14, id] of Object.entries(params.resources)) resources[name14] = replacement?.id === id ? replacement : this.dataResources[id];
-    if (Object.values(resources).some((resource) => !resource)) return;
-    const result = this.scene.representationSchemas.validate({ representation: params, resources });
-    if (result.status === "invalid") throw new Error(result.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; "));
-  }
-  _representationChanged(id) {
-    for (const mesh of Object.values(this.meshes)) if (mesh.representationId === id) mesh.setWorldMatrixDirty();
-    this.scene.events.onSceneRepresentationChanged.dispatch(this.scene, this);
+    return this._definitions._rollbackRepresentation(component);
   }
   /**
    * The {@link Scene | Scene} that contains this SceneModel.
@@ -84277,8 +86309,7 @@ var SceneModel = class {
    * matrix, effectively transforming the SceneModel into the global coordinate system.
    */
   coordinateSystem;
-  _coordinateSystemMatrix;
-  _coordinateSystemMatrixDirty = true;
+  rootFrame;
   /**
    * Whether IDs of {@link SceneObject | SceneObjects} are globalized.
    *
@@ -84294,7 +86325,9 @@ var SceneModel = class {
    * Viewers, renderers and scene collision/AABB indexing ignore them.
    */
   scratchpad;
-  /** @deprecated Use scratchpad. */
+  /**
+   * @deprecated Use scratchpad.
+   */
   get headless() {
     return this.scratchpad;
   }
@@ -84377,12 +86410,18 @@ var SceneModel = class {
    * View lighting. Explicit mesh assignments take precedence and are retained.
    */
   setLightingDomain(domain) {
-    if (this.destroyed || domain !== null && (!(domain instanceof LightingDomain) || domain.destroyed || domain.scene !== this.scene || this.scene.lightingDomains[domain.id] !== domain || this.scene.destroyed || this.scene._clearing || this._destroying)) return this.scene.logError({ ok: false, type: 2 /* InvalidInput */, error: "Invalid lighting domain" });
+    if (this.destroyed || domain !== null && (!(domain instanceof LightingDomain) || domain.destroyed || domain.scene !== this.scene || this.scene.lightingDomains[domain.id] !== domain || this.scene.destroyed || this.scene._clearing || this._destroying))
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: "Invalid lighting domain"
+      });
     if (domain === this._lightingDomain) return { ok: true, value: void 0 };
     this._lightingDomain?._models.delete(this);
     this._lightingDomain = domain;
     domain?._models.add(this);
-    for (const mesh of Object.values(this.meshes)) if (mesh._inheritsLightingDomain) this.scene.events.onSceneMeshLightingChanged.dispatch(this.scene, mesh);
+    for (const mesh of Object.values(this.meshes))
+      if (mesh._inheritsLightingDomain) this.scene.events.onSceneMeshLightingChanged.dispatch(this.scene, mesh);
     this.scene._lightingChanged();
     return { ok: true, value: void 0 };
   }
@@ -84394,7 +86433,12 @@ var SceneModel = class {
     const blocked = this._assertCanCreate("createLight");
     if (blocked) return blocked;
     const error = SceneLight.validate(this, params);
-    if (error || Object.prototype.hasOwnProperty.call(this.lights, params.id)) return this.scene.logError({ ok: false, type: 2 /* InvalidInput */, error: error ?? `Light already exists: ${params.id}` });
+    if (error || Object.prototype.hasOwnProperty.call(this.lights, params.id))
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: error ?? `Light already exists: ${params.id}`
+      });
     const light = new SceneLight(this.scene, this, params);
     this.lights[light.id] = light;
     this.scene.lights[light.uniqueId] = light;
@@ -84454,7 +86498,6 @@ var SceneModel = class {
    * - Contains no runtime playback state.
    */
   animations;
-  _variantSetsByObjectId = /* @__PURE__ */ new Map();
   /**
    * Statistics on this SceneModel.
    *
@@ -84505,7 +86548,9 @@ var SceneModel = class {
     this._building = !!building;
     this._notifyBuildTransition(wasBuilding);
   }
-  /** Acquires an independent, idempotently releasable loader build scope. @internal */
+  /**
+   * Acquires an independent, idempotently releasable loader build scope. @internal
+   */
   _beginBuild() {
     if (this.destroyed || this._destroying) return () => {
     };
@@ -84772,18 +86817,21 @@ var SceneModel = class {
    * @private
    */
   constructor(scene, sceneModelParams) {
+    this.source = sceneModelParams.source ? Object.freeze({ ...sceneModelParams.source }) : void 0;
     this.id = sceneModelParams.id;
     this.scene = scene;
+    this._assetFactory = new SceneAssetFactory(scene, this);
+    this._instanceFactory = new SceneInstanceFactory(scene, this);
+    this._definitions = new SceneDefinitions(scene, this);
+    this.behaviors = new SceneBehaviors(scene, this);
     this.coordinateSystem = new CoordinateSystem(
       this,
       () => {
-        this._coordinateSystemMatrixDirty = true;
         this.setWorldMatrixDirty();
       },
       sceneModelParams?.coordinateSystem
     );
-    this._coordinateSystemMatrix = createMat4Float64();
-    this._coordinateSystemMatrixDirty = true;
+    this.rootFrame = new SceneFrame(this.coordinateSystem, scene.coordinateSystem);
     this.globalizedIds = !!sceneModelParams.globalizedIds;
     this.scratchpad = (sceneModelParams.scratchpad ?? sceneModelParams.headless) === true;
     this._loadingMode = normalizeLoadingMode(sceneModelParams.loadingMode);
@@ -84819,75 +86867,14 @@ var SceneModel = class {
    * SceneAnimationPlayer.
    */
   createAnimation(animationParams) {
-    const createError = this._assertCanCreate("createAnimation");
-    if (createError) {
-      return createError;
-    }
-    const validationError = SceneAnimation.validateParams(animationParams);
-    if (validationError) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createAnimation] ${validationError}`
-      });
-    }
-    if (this.animations[animationParams.id]) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createAnimation] SceneAnimation already exists with this ID: ${animationParams.id}`
-      });
-    }
-    for (const channel of animationParams.channels) {
-      if (channel.target.type === "transform" && !Object.prototype.hasOwnProperty.call(this.transforms, channel.target.transformId)) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createAnimation] SceneTransform not found: ${channel.target.transformId}`
-        });
-      }
-      if (channel.target.type === "material") {
-        const id = channel.target.materialId;
-        if (!Object.prototype.hasOwnProperty.call(this.materials, id) || this.materials[id].destroyed) {
-          return this.scene.logError({ ok: false, type: 2 /* InvalidInput */, error: `[SceneModel.createAnimation] SceneMaterial not found: ${id}` });
-        }
-      }
-      if (channel.target.type === "vertexState" || channel.target.type === "morphWeights") {
-        const mesh = Object.prototype.hasOwnProperty.call(this.meshes, channel.target.meshId) ? this.meshes[channel.target.meshId] : void 0;
-        let error;
-        if (!mesh || mesh.destroyed) {
-          error = `SceneMesh not found: ${channel.target.meshId}`;
-        } else if (channel.target.type === "morphWeights") {
-          const count = mesh.geometry.morphTargets?.length ?? 0;
-          if (channel.sampler.valueSize !== count) error = `Expected ${count} morph weights for mesh '${mesh.id}'.`;
-        } else {
-          const count = mesh.geometry.vertexStatesCompressed?.length ?? 0;
-          if (Array.from(channel.sampler.values).some((index) => index >= count)) {
-            error = `Vertex-state samples must reference mesh '${mesh.id}' geometry states.`;
-          }
-        }
-        if (error) return this.scene.logError({ ok: false, type: 2 /* InvalidInput */, error: `[SceneModel.createAnimation] ${error}` });
-      }
-    }
-    const animation = new SceneAnimation(this, animationParams);
-    this.animations[animation.id] = animation;
-    this._activeBatch?.animations.push(animation);
-    this.scene.events.onSceneAnimationCreated.dispatch(this.scene, animation);
-    return { ok: true, value: animation };
+    return this.behaviors.createAnimation(animationParams);
   }
   /**
    * @internal
    * Destroys a SceneAnimation previously created in this model.
    */
   _destroyAnimation(animation) {
-    if (this.destroyed) {
-      throw new SDKInternalException(`Cannot destroy SceneAnimation ${animation.id} - SceneModel already destroyed`);
-    }
-    if (!this.animations[animation.id]) {
-      throw new SDKInternalException(`Cannot destroy SceneAnimation ${animation.id} - SceneAnimation not found in SceneModel`);
-    }
-    delete this.animations[animation.id];
-    this.scene.events.onSceneAnimationDestroyed.dispatch(this.scene, animation);
+    return this.behaviors._destroyAnimation(animation);
   }
   /**
    * Caches a matrix used to transform positions between SceneModel and Scene CoordinateSystems.
@@ -84895,11 +86882,7 @@ var SceneModel = class {
    * positions from the SceneModel CoordinateSystem to the Scene CoordinateSystem within.
    */
   get coordinateSystemMatrix() {
-    if (this._coordinateSystemMatrixDirty) {
-      this._coordinateSystemMatrix = createCoordinateSystemTransform(this.coordinateSystem, this.scene.coordinateSystem, this._coordinateSystemMatrix);
-      this._coordinateSystemMatrixDirty = false;
-    }
-    return this._coordinateSystemMatrix;
+    return this.rootFrame.matrix;
   }
   /**
    * Creates a shared clip volume. Transforms must already exist in this model.
@@ -84908,7 +86891,12 @@ var SceneModel = class {
     const blocked = this._assertCanCreate("createClipBox");
     if (blocked) return blocked;
     const error = SceneClipBox.validate(this, params) || (Object.prototype.hasOwnProperty.call(this.clipBoxes, params.id) ? `Clip box already exists: ${params.id}` : null);
-    if (error) return this.scene.logError({ ok: false, type: 2 /* InvalidInput */, error });
+    if (error)
+      return this.scene.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error
+      });
     const box = new SceneClipBox(this.scene, this, params);
     this.clipBoxes[box.id] = box;
     this.scene.clipBoxes[box.uniqueId] = box;
@@ -84959,63 +86947,14 @@ var SceneModel = class {
    *   - Parent SceneTransform not found with the given parentTransformId.
    */
   createTransform(transformParams) {
-    const createError = this._assertCanCreate("createTransform");
-    if (createError) {
-      return createError;
-    }
-    if (!transformParams.id) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createTransform] Parameter expected: transformParams.id"
-      });
-    }
-    if (this.transforms[transformParams.id]) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createTransform] SceneTransform already exists with this ID: ${transformParams.id}`
-      });
-    }
-    let parentTransform;
-    if (transformParams.parentTransformId) {
-      parentTransform = this.transforms[transformParams.parentTransformId];
-      if (!parentTransform) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createTransform] Parent SceneTransform not found: ${transformParams.parentTransformId}`
-        });
-      }
-    }
-    const sceneTransform = new SceneTransform(this, transformParams);
-    if (parentTransform) {
-      sceneTransform.setParentTransformId(parentTransform.id);
-    }
-    this.transforms[transformParams.id] = sceneTransform;
-    this.stats.numTransforms++;
-    this._recordActiveBatchComponent(sceneTransform);
-    this.scene.events.onSceneTransformCreated.dispatch(this.scene, sceneTransform);
-    return {
-      ok: true,
-      value: sceneTransform
-    };
+    return this._instanceFactory.createTransform(transformParams);
   }
   /**
    * @internal
    * Destroys a {@link SceneTransform} previously created in this model.
    */
   _destroyTransform(sceneTransform) {
-    const transformId = sceneTransform.id;
-    if (this.destroyed) {
-      throw new SDKInternalException(`Cannot destroy SceneTransform ${transformId} - SceneModel already destroyed`);
-    }
-    if (!this.transforms[transformId]) {
-      throw new SDKInternalException(`Cannot destroy SceneTransform ${transformId} - SceneTransform not found in SceneModel`);
-    }
-    delete this.transforms[transformId];
-    this.stats.numTransforms--;
-    this.scene.events.onSceneTransformDestroyed.dispatch(this.scene, sceneTransform);
+    this.scene.instances.remove(sceneTransform);
   }
   /**
    * Creates a new {@link SceneTexture} within this SceneModel.
@@ -85053,82 +86992,25 @@ var SceneModel = class {
    *
    * See {@link model!scene | @xeokit/sdk/model/scene} for more usage info.
    *
-   * @param textureParams - SceneTexture creation parameters.
+   * @param params - SceneTexture creation parameters.
    * @returns SDKResult with:
    * - On success, the created {@link SceneTexture}.
    * - On failure, an error message. Reasons for failure include:
    *   - SceneModel already destroyed.
-   *   - Missing required parameter: textureParams.imageData, textureParams.image, textureParams.src or textureParams.buffers.
+   *   - Missing required parameter: params.imageData, params.image, params.src or params.buffers.
    *   - Texture already exists with the given ID.
    *   - Unsupported image extension.
    */
-  createTexture(textureParams) {
-    const createError = this._assertCanCreate("createTexture", true);
-    if (createError) {
-      return createError;
-    }
-    if (!textureParams.id) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createTexture] Parameter expected: textureParams.id"
-      });
-    }
-    if (!textureParams.imageData && !textureParams.image && !textureParams.src && !textureParams.buffers) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createTexture] Parameter expected: textureParams.imageData, textureParams.image, textureParams.src or textureParams.buffers"
-      });
-    }
-    if (this.textures[textureParams.id]) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createTexture] Cannot create Texture - Texture already exists with this ID: '${textureParams.id}'`
-      });
-    }
-    if (textureParams.src) {
-      const fileExt = textureParams.src.split(".").pop();
-    }
-    let texture;
-    try {
-      texture = new SceneTexture(this, textureParams);
-    } catch (error) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createTexture] ${error instanceof Error ? error.message : String(error)}`
-      });
-    }
-    this.textures[textureParams.id] = texture;
-    this.stats.numTextures++;
-    this.stats.textureBytes += texture.textureBytes;
-    this._recordActiveBatchComponent(texture);
-    this.scene.events.onSceneTextureCreated.dispatch(this.scene, texture);
-    texture._loadImage();
-    return {
-      ok: true,
-      value: texture
-    };
+  createTexture(params) {
+    return this._assetFactory.createTexture(params);
   }
   /**
    * Called by a {@link SceneTexture} when it is destroyed.
    * @internal
    * @param sceneTexture
    */
-  _destroyTexture(sceneTexture) {
-    const textureId = sceneTexture.id;
-    if (this.destroyed) {
-      throw new SDKInternalException(`Cannot destroy SceneTexture ${textureId} - SceneModel already destroyed`);
-    }
-    if (!this.textures[textureId]) {
-      throw new SDKInternalException(`Cannot destroy SceneTexture ${textureId} - SceneTexture not found in SceneModel`);
-    }
-    delete this.textures[textureId];
-    this.stats.numTextures--;
-    this.stats.textureBytes -= sceneTexture.textureBytes;
-    this.scene.events.onSceneTextureDestroyed.dispatch(this.scene, sceneTexture);
+  _destroyTexture(texture) {
+    this.scene.assets.remove(texture);
   }
   /**
    * Creates a new {@link model!scene.SceneMaterial | SceneMaterial} within this SceneModel.
@@ -85156,7 +87038,7 @@ var SceneModel = class {
    *
    * See {@link model!scene | @xeokit/sdk/model/scene}   for more usage info.
    *
-   * @param materialParams SceneMaterial creation parameters.
+   * @param params SceneMaterial creation parameters.
    *
    * @returns SDKResult with:
    * - On success, the created {@link model!scene.SceneMaterial | SceneMaterial}.
@@ -85165,120 +87047,16 @@ var SceneModel = class {
    *  - Material already exists with the given ID.
    *  - Referenced texture not found in SceneModel.
    */
-  createMaterial(materialParams) {
-    const createError = this._assertCanCreate("createMaterial", true);
-    if (createError) {
-      return createError;
-    }
-    if (this.materials[materialParams.id]) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createMaterial] Material already exists with this ID: '${materialParams.id}'`
-      });
-    }
-    let colorTexture;
-    if (materialParams.colorTextureId !== void 0 && materialParams.colorTextureId !== null) {
-      colorTexture = this.textures[materialParams.colorTextureId];
-      if (!colorTexture) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createMaterial] Texture not found: '${materialParams.colorTextureId}' - ensure that you create it first with createTexture()`
-        });
-      }
-      colorTexture.channel = COLOR_TEXTURE;
-    }
-    let metallicRoughnessTexture;
-    if (materialParams.metallicRoughnessTextureId !== void 0 && materialParams.metallicRoughnessTextureId !== null) {
-      metallicRoughnessTexture = this.textures[materialParams.metallicRoughnessTextureId];
-      if (!metallicRoughnessTexture) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createMaterial] Texture not found: '${materialParams.metallicRoughnessTextureId}' - ensure that you create it first with createTexture()`
-        });
-      }
-      metallicRoughnessTexture.channel = METALLIC_ROUGHNESS_TEXTURE;
-    }
-    let normalsTexture;
-    if (materialParams.normalsTextureId !== void 0 && materialParams.normalsTextureId !== null) {
-      normalsTexture = this.textures[materialParams.normalsTextureId];
-      if (!normalsTexture) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createMaterial] Texture not found: '${materialParams.normalsTextureId}' - ensure that you create it first with createTexture()`
-        });
-      }
-      normalsTexture.channel = NORMALS_TEXTURE;
-    }
-    let emissiveTexture;
-    if (materialParams.emissiveTextureId !== void 0 && materialParams.emissiveTextureId !== null) {
-      emissiveTexture = this.textures[materialParams.emissiveTextureId];
-      if (!emissiveTexture) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createMaterial] Texture not found: '${materialParams.emissiveTextureId}' - ensure that you create it first with createTexture()`
-        });
-      }
-      emissiveTexture.channel = EMISSIVE_TEXTURE;
-    }
-    let occlusionTexture;
-    if (materialParams.occlusionTextureId !== void 0 && materialParams.occlusionTextureId !== null) {
-      occlusionTexture = this.textures[materialParams.occlusionTextureId];
-      if (!occlusionTexture) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createMaterial] Texture not found: '${materialParams.occlusionTextureId}' - ensure that you create it first with createTexture()`
-        });
-      }
-      occlusionTexture.channel = OCCLUSION_TEXTURE;
-    }
-    const material = new SceneMaterial(this, materialParams, {
-      emissiveTexture,
-      occlusionTexture,
-      metallicRoughnessTexture,
-      normalsTexture,
-      colorTexture
-    });
-    if (colorTexture) colorTexture.numMaterials++;
-    if (metallicRoughnessTexture) metallicRoughnessTexture.numMaterials++;
-    if (normalsTexture) normalsTexture.numMaterials++;
-    if (occlusionTexture) occlusionTexture.numMaterials++;
-    if (emissiveTexture) emissiveTexture.numMaterials++;
-    this.materials[materialParams.id] = material;
-    this.stats.numMaterials++;
-    this._recordActiveBatchComponent(material);
-    this.scene.events.onSceneMaterialCreated.dispatch(this.scene, material);
-    return {
-      ok: true,
-      value: material
-    };
+  createMaterial(params) {
+    return this._assetFactory.createMaterial(params);
   }
   /**
    * Called by a {@link model!scene.SceneMaterial | SceneMaterial} when it is destroyed.
    * @internal
    * @param sceneMaterial
    */
-  _destroyMaterial(sceneMaterial) {
-    const materialId = sceneMaterial.id;
-    if (this.destroyed) {
-      throw new SDKInternalException(`Cannot destroy SceneMaterial '${materialId}' - SceneModel already destroyed`);
-    }
-    if (!this.materials[materialId]) {
-      throw new SDKInternalException(`Cannot destroy SceneMaterial '${materialId}' - SceneMaterial not found in SceneModel`);
-    }
-    if (sceneMaterial.colorTexture) sceneMaterial.colorTexture.numMaterials--;
-    if (sceneMaterial.metallicRoughnessTexture) sceneMaterial.metallicRoughnessTexture.numMaterials--;
-    if (sceneMaterial.normalsTexture) sceneMaterial.normalsTexture.numMaterials--;
-    if (sceneMaterial.occlusionTexture) sceneMaterial.occlusionTexture.numMaterials--;
-    if (sceneMaterial.emissiveTexture) sceneMaterial.emissiveTexture.numMaterials--;
-    delete this.materials[materialId];
-    this.stats.numMaterials--;
-    this.scene.events.onSceneMaterialDestroyed.dispatch(this.scene, sceneMaterial);
+  _destroyMaterial(material) {
+    this.scene.assets.remove(material);
   }
   /**
    * Creates a new {@link model!scene.SceneGeometry | SceneGeometry} within this SceneModel, from non-compressed geometry parameters.
@@ -85318,13 +87096,13 @@ var SceneModel = class {
    *
    * See {@link model!scene | @xeokit/sdk/model/scene}   for more usage info.
    *
-   * `geometryParams.positions` supplies the current/base positions for ordinary
+   * `params.positions` supplies the current/base positions for ordinary
    * static geometry. For fixed-topology frame sequences, callers may omit
    * `positions` and provide {@link SceneGeometryParams.frames | frames}; in that
    * case `frames[0].positions` becomes the current/base geometry while all
    * frames are retained on the created {@link SceneGeometry}.
    *
-   * @param geometryParams Non-compressed geometry parameters.
+   * @param params Non-compressed geometry parameters.
    * @returns SDKResult with:
    * - On success, the created {@link model!scene.SceneGeometry | SceneGeometry}.
    * - On failure, an error message. Reasons for failure include:
@@ -85340,229 +87118,8 @@ var SceneModel = class {
    *   - Indices are out of range of vertex UVs.
    *   - Mismatch between the quantities of vertex positions and UVs.
    */
-  createGeometry(geometryParams) {
-    const createError = this._assertCanCreate("createGeometry");
-    if (createError) {
-      return createError;
-    }
-    if (!geometryParams) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createGeometry] Missing required 'geometryParams'."
-      });
-    }
-    const { id, positions, indices, primitive, uvs, colors, normals, frames, vertexStates, morphTargets } = geometryParams;
-    const sourceVertexStates = vertexStates ?? frames;
-    const basePositions = positions ?? sourceVertexStates?.[0]?.positions;
-    const baseNormals = normals ?? sourceVertexStates?.[0]?.normals;
-    if (id === null || id === void 0) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createGeometry] Missing required 'id' in geometryParams."
-      });
-    }
-    if (this.geometries[id]) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createGeometry] A geometry with ID '${id}' already exists in this SceneModel.`
-      });
-    }
-    if (!basePositions) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createGeometry] Missing required 'positions' or 'frames[0].positions' in geometryParams."
-      });
-    }
-    if (basePositions.length === 0) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createGeometry] Geometry positions cannot be empty."
-      });
-    }
-    if (basePositions.length % 3 !== 0) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createGeometry] The length of geometry positions must be a multiple of 3."
-      });
-    }
-    const numberError = validateGeometryNumbers(geometryParams, basePositions.length / 3);
-    if (numberError) return this.scene.logError({
-      ok: false,
-      type: 2 /* InvalidInput */,
-      error: `[SceneModel.createGeometry] ${numberError}`
-    });
-    if (sourceVertexStates) {
-      if (sourceVertexStates.length === 0) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneModel.createGeometry] 'vertexStates' cannot be empty."
-        });
-      }
-      for (let i = 0, len = sourceVertexStates.length; i < len; i++) {
-        const frame = sourceVertexStates[i];
-        if (!frame.positions) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometry] Missing required 'positions' in vertexStates[${i}].`
-          });
-        }
-        if (frames && !Number.isFinite(frame.time)) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometry] Invalid time in frames[${i}].`
-          });
-        }
-        if (frames && i > 0 && frame.time <= sourceVertexStates[i - 1].time) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: "[SceneModel.createGeometry] Frame times must be strictly increasing."
-          });
-        }
-        if (frame.positions.length !== basePositions.length) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometry] Mismatch between base positions and frames[${i}].positions`
-          });
-        }
-        if (frame.positions.length % 3 !== 0) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometry] The length of frames[${i}].positions must be a multiple of 3.`
-          });
-        }
-        if (frame.normals && frame.normals.length !== frame.positions.length) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometry] Mismatch between given quantities of positions and normals in frames[${i}]`
-          });
-        }
-      }
-    }
-    if (morphTargets) {
-      const uvError = validateMorphTargetUVs(morphTargets, uvs ?? geometryParams.texCoords?.[0], basePositions.length / 3);
-      if (uvError) return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createGeometry] ${uvError}`
-      });
-      for (let i = 0; i < morphTargets.length; i++) {
-        const target = morphTargets[i];
-        if (target.positions && target.positions.length !== basePositions.length) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometry] morphTargets[${i}].positions length must match base positions.`
-          });
-        }
-        if (target.normals && target.normals.length !== basePositions.length) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometry] morphTargets[${i}].normals length must match base positions.`
-          });
-        }
-      }
-    }
-    if (primitive !== PointsPrimitive && primitive !== GaussianSplatsPrimitive && (!indices || indices.length === 0)) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createGeometry] Missing/empty required 'indices' for the specified primitive type."
-      });
-    }
-    if (primitive !== PointsPrimitive && primitive !== LinesPrimitive && primitive !== TrianglesPrimitive && primitive !== SolidPrimitive && primitive !== SurfacePrimitive && primitive !== GaussianSplatsPrimitive) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createGeometry] Unsupported value for geometryParams.primitive: '${primitive}' - supported values are PointsPrimitive, LinesPrimitive, TrianglesPrimitive, SolidPrimitive, SurfacePrimitive and GaussianSplatsPrimitive`
-      });
-    }
-    if (colors && colors.length > 0) {
-      if (colors.length / 4 !== basePositions.length / 3) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneModel.createGeometry] Mismatch between given quantities of vertex positions and colors"
-        });
-      }
-    }
-    if (uvs && uvs.length > 0) {
-      if (uvs.length / 2 !== basePositions.length / 3) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneModel.createGeometry] Mismatch between given quantities of vertex positions and UVs"
-        });
-      }
-    }
-    if (baseNormals && baseNormals.length > 0) {
-      if (baseNormals.length !== basePositions.length) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneModel.createGeometry] Mismatch between given quantities of vertex positions and normals"
-        });
-      }
-    }
-    if (indices) {
-      const lastPositionsIdx = basePositions.length / 3;
-      for (let i = 0, len = indices.length; i < len; i++) {
-        const idx = indices[i];
-        if (idx < 0 || idx >= lastPositionsIdx) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: "[SceneModel.createGeometry] Indices out of range of vertex positions"
-          });
-        }
-        if (uvs) {
-          const lastUVsIdx = uvs.length / 2;
-          if (idx < 0 || idx >= lastUVsIdx) {
-            return this.scene.logError({
-              ok: false,
-              type: 2 /* InvalidInput */,
-              error: "[SceneModel.createGeometry] Indices out of range of vertex UVs"
-            });
-          }
-        }
-      }
-    }
-    const sceneGeometry = new SceneGeometry(
-      this,
-      compressGeometryParams(geometryParams)
-    );
-    this.geometries[id] = sceneGeometry;
-    this.stats.numGeometries++;
-    this._bumpPrimitiveCount(sceneGeometry.primitive, 1);
-    if (indices) {
-      if (sceneGeometry.primitive === TrianglesPrimitive) {
-        this.stats.numTriangles += indices.length / 3;
-      } else if (sceneGeometry.primitive === LinesPrimitive) {
-        this.stats.numLines += indices.length / 2;
-      }
-    } else if (sceneGeometry.primitive === PointsPrimitive) {
-      this.stats.numPoints += basePositions.length / 3;
-    }
-    this.stats.numVertices += basePositions.length / 3;
-    this._recordActiveBatchComponent(sceneGeometry);
-    this.scene.events.onSceneGeometryCreated.dispatch(this.scene, sceneGeometry);
-    return {
-      ok: true,
-      value: sceneGeometry
-    };
+  createGeometry(params) {
+    return this._assetFactory.geometry.createGeometry(params);
   }
   /**
    * Creates a new {@link model!scene.SceneGeometry | SceneGeometry} within this SceneModel, from pre-compressed geometry parameters.
@@ -85601,7 +87158,7 @@ var SceneModel = class {
    *
    * See {@link model!scene | @xeokit/sdk/model/scene}   for more usage info.
    *
-   * `geometryCompressedParams.positionsCompressed` and `aabb` supply the
+   * `params.positionsCompressed` and `aabb` supply the
    * current/base compressed positions for ordinary static geometry. For
    * fixed-topology frame sequences, callers may omit those top-level fields and
    * provide {@link SceneGeometryCompressedParams.framesCompressed | framesCompressed};
@@ -85609,7 +87166,7 @@ var SceneModel = class {
    * `framesCompressed[0].aabb` become the current/base geometry while all frames
    * are retained on the created {@link SceneGeometry}.
    *
-   * @param geometryCompressedParams Pre-compressed geometry parameters.
+   * @param params Pre-compressed geometry parameters.
    *
    * @returns SDKResult with:
    * * On success, the created {@link model!scene.SceneGeometry | SceneGeometry}.
@@ -85626,325 +87183,8 @@ var SceneModel = class {
    *   - Indices out of range of vertex UVs.
    *   - Mismatch between given quantities of vertex positions and UVs.
    */
-  createGeometryCompressed(geometryCompressedParams) {
-    const createError = this._assertCanCreate("createGeometryCompressed");
-    if (createError) {
-      return createError;
-    }
-    if (!geometryCompressedParams) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createGeometryCompressed] Parameters expected: geometryCompressedParams"
-      });
-    }
-    const {
-      id,
-      indices,
-      primitive,
-      positionsCompressed: inputPositionsCompressed,
-      uvsCompressed,
-      texCoordsCompressed,
-      normalsCompressed,
-      colorsCompressed,
-      aabb: inputAABB,
-      framesCompressed,
-      vertexStatesCompressed,
-      morphTargets,
-      scales,
-      rotations
-    } = geometryCompressedParams;
-    const sourceVertexStatesCompressed = vertexStatesCompressed ?? framesCompressed;
-    const positionsCompressed = inputPositionsCompressed ?? sourceVertexStatesCompressed?.[0]?.positionsCompressed;
-    const aabb = inputAABB ?? sourceVertexStatesCompressed?.[0]?.aabb;
-    if (id === null || id === void 0) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createGeometryCompressed] Parameter expected: 'id'"
-      });
-    }
-    if (!positionsCompressed) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createGeometryCompressed] Parameter expected: 'positionsCompressed' or 'framesCompressed[0].positionsCompressed'"
-      });
-    }
-    if (positionsCompressed.length === 0) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createGeometryCompressed] 'positionsCompressed' cannot be empty."
-      });
-    }
-    if (positionsCompressed.length % 3 !== 0) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createGeometryCompressed] The length of 'positionsCompressed' must be a multiple of 3."
-      });
-    }
-    if (primitive !== PointsPrimitive && primitive !== LinesPrimitive && primitive !== TrianglesPrimitive && primitive !== SolidPrimitive && primitive !== SurfacePrimitive && primitive !== GaussianSplatsPrimitive) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createGeometryCompressed] Unsupported value for parameter 'primitive': '${primitive}' - supported values are PointsPrimitive, LinesPrimitive, TrianglesPrimitive, SolidPrimitive, SurfacePrimitive and GaussianSplatsPrimitive`
-      });
-    }
-    if (!aabb || aabb.length !== 6) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createGeometryCompressed] Parameter expected: 'aabb' with six elements."
-      });
-    }
-    const numberError = validateGeometryNumbers(geometryCompressedParams, positionsCompressed.length / 3);
-    if (numberError) return this.scene.logError({
-      ok: false,
-      type: 2 /* InvalidInput */,
-      error: `[SceneModel.createGeometry] ${numberError}`
-    });
-    if (!inputPositionsCompressed) {
-      geometryCompressedParams.positionsCompressed = positionsCompressed;
-    }
-    if (!inputAABB) {
-      geometryCompressedParams.aabb = aabb;
-    }
-    if (sourceVertexStatesCompressed) {
-      if (sourceVertexStatesCompressed.length === 0) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneModel.createGeometryCompressed] 'framesCompressed' cannot be empty."
-        });
-      }
-      for (let i = 0, len = sourceVertexStatesCompressed.length; i < len; i++) {
-        const frame = sourceVertexStatesCompressed[i];
-        if (!frame.positionsCompressed) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometryCompressed] Missing required 'positionsCompressed' in framesCompressed[${i}].`
-          });
-        }
-        if (framesCompressed && !Number.isFinite(frame.time)) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometryCompressed] Invalid time in framesCompressed[${i}].`
-          });
-        }
-        if (framesCompressed && i > 0 && frame.time <= sourceVertexStatesCompressed[i - 1].time) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: "[SceneModel.createGeometryCompressed] Frame times must be strictly increasing."
-          });
-        }
-        if (frame.positionsCompressed.length !== positionsCompressed.length) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometryCompressed] Mismatch between base positions and framesCompressed[${i}].positionsCompressed`
-          });
-        }
-        if (frame.positionsCompressed.length % 3 !== 0) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometryCompressed] The length of framesCompressed[${i}].positionsCompressed must be a multiple of 3.`
-          });
-        }
-        if (!frame.aabb || frame.aabb.length !== 6) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometryCompressed] Parameter expected: 'aabb' with six elements in framesCompressed[${i}].`
-          });
-        }
-        if (frame.normalsCompressed && frame.normalsCompressed.length / 2 !== frame.positionsCompressed.length / 3) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and normals in framesCompressed[${i}]`
-          });
-        }
-        if (frame.uvsCompressed && frame.uvsCompressed.length / 2 !== frame.positionsCompressed.length / 3) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and UVs in framesCompressed[${i}]`
-          });
-        }
-      }
-    }
-    if (morphTargets) {
-      const vertexCount2 = positionsCompressed.length / 3;
-      const uvError = validateMorphTargetUVs(morphTargets, uvsCompressed ?? texCoordsCompressed?.[0], vertexCount2);
-      if (uvError) return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createGeometryCompressed] ${uvError}`
-      });
-      for (let i = 0; i < morphTargets.length; i++) {
-        const target = morphTargets[i];
-        if (target.positions && target.positions.length !== positionsCompressed.length) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometryCompressed] morphTargets[${i}].positions length must match base positions.`
-          });
-        }
-        if (target.normals && target.normals.length !== vertexCount2 * 3) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometryCompressed] morphTargets[${i}].normals length must match vertex count * 3.`
-          });
-        }
-      }
-    }
-    if ((!indices || indices.length === 0) && primitive !== PointsPrimitive && primitive !== GaussianSplatsPrimitive) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createGeometryCompressed] Missing expected 'indices' for the specified primitive type."
-      });
-    }
-    if (indices) {
-      if (primitive === LinesPrimitive && indices.length % 2 !== 0) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneModel.createGeometryCompressed] The length of 'indices' must be a multiple of 2 for line geometry."
-        });
-      }
-      if ((primitive === TrianglesPrimitive || primitive === SolidPrimitive || primitive === SurfacePrimitive) && indices.length % 3 !== 0) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneModel.createGeometryCompressed] The length of 'indices' must be a multiple of 3 for triangle geometry."
-        });
-      }
-    }
-    const numVertices = positionsCompressed.length / 3;
-    if (colorsCompressed) {
-      if (colorsCompressed.length / 4 !== numVertices) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and colors"
-        });
-      }
-    }
-    if (uvsCompressed) {
-      if (uvsCompressed.length / 2 !== numVertices) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and UVs"
-        });
-      }
-    }
-    if (texCoordsCompressed) {
-      for (const key of Object.keys(texCoordsCompressed)) {
-        const channel = Number(key);
-        const texCoords = texCoordsCompressed[channel];
-        if (!Number.isInteger(channel) || channel < 0) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: "[SceneModel.createGeometryCompressed] Texture-coordinate channel indices must be non-negative integers"
-          });
-        }
-        if (texCoords && texCoords.length / 2 !== numVertices) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and texture-coordinate channel ${channel}`
-          });
-        }
-      }
-    }
-    if (normalsCompressed) {
-      if (normalsCompressed.length / 2 !== numVertices) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and normals"
-        });
-      }
-    }
-    if (scales) {
-      if (scales.length / 3 !== numVertices) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and splat scales"
-        });
-      }
-    }
-    if (rotations) {
-      if (rotations.length / 4 !== numVertices) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneModel.createGeometryCompressed] Mismatch between given quantities of vertex positions and splat rotations"
-        });
-      }
-    }
-    if (indices) {
-      const lastPositionsIdx = numVertices;
-      for (let i = 0, len = indices.length; i < len; i++) {
-        const idx = indices[i];
-        if (idx < 0 || idx >= lastPositionsIdx) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: "[SceneModel.createGeometryCompressed] Indices out of range of vertex positions"
-          });
-        }
-        if (uvsCompressed) {
-          const lastUVsIdx = uvsCompressed.length / 2;
-          if (idx < 0 || idx >= lastUVsIdx) {
-            return this.scene.logError({
-              ok: false,
-              type: 2 /* InvalidInput */,
-              error: "[SceneModel.createGeometryCompressed] Indices out of range of vertex UVs"
-            });
-          }
-        }
-      }
-    }
-    const geometryId = id;
-    if (this.geometries[geometryId]) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createGeometryCompressed] SceneGeometry with this ID already exists: '${geometryId}'`
-      });
-    }
-    const sceneGeometry = new SceneGeometry(this, geometryCompressedParams);
-    this.geometries[geometryId] = sceneGeometry;
-    this.stats.numGeometries++;
-    this._bumpPrimitiveCount(sceneGeometry.primitive, 1);
-    if (indices) {
-      if (sceneGeometry.primitive === TrianglesPrimitive) {
-        this.stats.numTriangles += indices.length / 3;
-      } else if (sceneGeometry.primitive === LinesPrimitive) {
-        this.stats.numLines += indices.length / 2;
-      }
-    } else if (sceneGeometry.primitive === PointsPrimitive) {
-      this.stats.numPoints += positionsCompressed.length / 3;
-    }
-    this.stats.numVertices += positionsCompressed.length / 3;
-    this._recordActiveBatchComponent(sceneGeometry);
-    this.scene.events.onSceneGeometryCreated.dispatch(this.scene, sceneGeometry);
-    return {
-      ok: true,
-      value: sceneGeometry
-    };
+  createGeometryCompressed(params) {
+    return this._assetFactory.geometry.createGeometryCompressed(params);
   }
   /**
    * Returns `true` if this SceneModel currently holds at least one
@@ -85958,7 +87198,9 @@ var SceneModel = class {
   containsPrimitive(primitive) {
     return (this._primitiveCounts.get(primitive) ?? 0) > 0;
   }
-  /** Adjusts the per-primitive geometry count, clearing zeroed entries. */
+  /**
+   * Adjusts the per-primitive geometry count, clearing zeroed entries.
+   */
   _bumpPrimitiveCount(primitive, delta) {
     const next2 = (this._primitiveCounts.get(primitive) ?? 0) + delta;
     if (next2 > 0) {
@@ -85974,31 +87216,8 @@ var SceneModel = class {
    * Called by a {@link model!scene.SceneGeometry | SceneGeometry} when it is
    * destroyed.
    */
-  _destroyGeometry(sceneGeometry) {
-    const geometryId = sceneGeometry.id;
-    if (this.destroyed) {
-      throw new SDKInternalException(`Cannot destroy SceneGeometry '${geometryId}' - SceneModel already destroyed`);
-    }
-    if (!this.geometries[geometryId]) {
-      throw new SDKInternalException(`Cannot destroy SceneGeometry '${geometryId}' - SceneGeometry not found in SceneModel`);
-    }
-    if (sceneGeometry.numMeshes > 0) {
-      throw new SDKInternalException(`Cannot destroy SceneGeometry '${geometryId}' - SceneGeometry is currently used by at least one SceneMesh, which you need to destroy first`);
-    }
-    delete this.geometries[geometryId];
-    this.stats.numGeometries--;
-    this._bumpPrimitiveCount(sceneGeometry.primitive, -1);
-    if (sceneGeometry.indices) {
-      if (sceneGeometry.primitive === TrianglesPrimitive) {
-        this.stats.numTriangles -= sceneGeometry.indices.length / 3;
-      } else if (sceneGeometry.primitive === LinesPrimitive) {
-        this.stats.numLines -= sceneGeometry.indices.length / 2;
-      }
-    } else if (sceneGeometry.primitive === PointsPrimitive) {
-      this.stats.numPoints -= sceneGeometry.positionsCompressed.length / 3;
-    }
-    this.stats.numVertices -= sceneGeometry.positionsCompressed.length / 3;
-    this.scene.events.onSceneGeometryDestroyed.dispatch(this.scene, sceneGeometry);
+  _destroyGeometry(geometry) {
+    this.scene.assets.remove(geometry);
   }
   /**
    * Creates a new {@link model!scene.SceneMesh | SceneMesh} within this SceneModel.
@@ -86044,214 +87263,7 @@ var SceneModel = class {
    *   - `frameTime` was supplied but is not finite.
    */
   createMesh(meshParams) {
-    if (meshParams.representationMode !== void 0 && !["replace", "augment"].includes(meshParams.representationMode)) {
-      return { ok: false, type: 2 /* InvalidInput */, error: "Invalid representation ownership mode" };
-    }
-    if (meshParams.representationId !== void 0 && (typeof meshParams.representationId !== "string" || !meshParams.representationId)) {
-      return { ok: false, type: 2 /* InvalidInput */, error: "Representation binding must be a nonempty ID" };
-    }
-    let {
-      id,
-      geometryId,
-      parentTransformId,
-      materialId,
-      matrix,
-      position,
-      scale: scale3,
-      rotation,
-      quaternion,
-      origin: origin2,
-      color,
-      opacity,
-      frameTime,
-      morphWeights,
-      billboard,
-      bin
-    } = meshParams;
-    const createError = this._assertCanCreate("createMesh");
-    if (createError) {
-      return createError;
-    }
-    if (this.meshes[id]) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createMesh] SceneMesh already exists with this ID: '${id}'`
-      });
-    }
-    let transform2;
-    if (parentTransformId) {
-      transform2 = this.transforms[parentTransformId];
-      if (!transform2) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createMesh] parent SceneTransform not found: '${parentTransformId}'`
-        });
-      }
-    }
-    const geometry = this.geometries[geometryId];
-    if (!geometry) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createMesh] SceneGeometry not found: '${geometryId}'`
-      });
-    }
-    const clipBox = meshParams.clipBoxId !== void 0 ? this.clipBoxes[meshParams.clipBoxId] : void 0;
-    if (meshParams.clipBoxId !== void 0 && !clipBox) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `Clip box not found: ${meshParams.clipBoxId}`
-      });
-    }
-    if (clipBox && (meshParams.representationId || geometry.primitive === GaussianSplatsPrimitive)) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "Clip boxes do not yet support representations or Gaussian splats"
-      });
-    }
-    const material = materialId ? this.materials[materialId] : void 0;
-    if (materialId && !material) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createMesh] Material not found: '${materialId}'`
-      });
-    }
-    if (origin2 && origin2.length !== 3) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createMesh] Parameter 'origin' is not a vec3 array`
-      });
-    }
-    if (!matrix) {
-      if (position || scale3 || rotation || quaternion || origin2) {
-        if (position && position.length !== 3) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createMesh] Parameter 'position' is not a vec3 array`
-          });
-        }
-        if (scale3 && scale3.length !== 3) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createMesh] Parameter 'scale' is not a vec3 array`
-          });
-        }
-        if (rotation && rotation.length !== 3) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createMesh] Parameter 'rotation' is not a vec3 array`
-          });
-        }
-        if (quaternion && quaternion.length !== 4) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createMesh] Parameter 'quaternion' is not a vec4 array`
-          });
-        }
-        matrix = identityMat4();
-        composeMat4(
-          position || [0, 0, 0],
-          quaternion || eulerToQuat(rotation || [0, 0, 0], "XYZ", identityQuat()),
-          scale3 || [1, 1, 1],
-          matrix
-        );
-      }
-    } else {
-      if (matrix.length !== 16) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createMesh] Parameter 'matrix' is not a mat4 array`
-        });
-      }
-      matrix = createMat4Float64(matrix);
-    }
-    if (origin2 && matrix) {
-      matrix[12] += origin2[0];
-      matrix[13] += origin2[1];
-      matrix[14] += origin2[2];
-    }
-    if (color && color.length !== 3) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createMesh] Parameter 'color' is not a vec3 array`
-      });
-    }
-    if (billboard !== void 0 && billboard !== "none" && billboard !== "spherical") {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createMesh] Unsupported billboard mode: '${billboard}'`
-      });
-    }
-    if (frameTime !== void 0 && !Number.isFinite(frameTime)) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createMesh] Parameter 'frameTime' must be finite"
-      });
-    }
-    const morphTargetCount = geometry.morphTargets?.length ?? 0;
-    if (morphWeights !== void 0) {
-      if (morphWeights.length !== morphTargetCount) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createMesh] Parameter 'morphWeights' length must match geometry morph target count ${morphTargetCount}`
-        });
-      }
-      for (let i = 0; i < morphWeights.length; i++) {
-        if (!Number.isFinite(morphWeights[i])) {
-          return this.scene.logError({
-            ok: false,
-            type: 2 /* InvalidInput */,
-            error: `[SceneModel.createMesh] Parameter 'morphWeights[${i}]' must be finite`
-          });
-        }
-      }
-    }
-    const sceneMesh = new SceneMesh({
-      id,
-      model: this,
-      clipBox,
-      geometry,
-      material,
-      matrix,
-      color,
-      opacity,
-      frameTime,
-      morphWeights,
-      billboard: billboard ?? "none",
-      representationId: meshParams.representationId,
-      representationMode: meshParams.representationMode,
-      bin
-    });
-    if (transform2) {
-      sceneMesh.setParentTransformId(transform2.id);
-    }
-    geometry.numMeshes++;
-    if (material) {
-      material.numMeshes++;
-    }
-    this.meshes[id] = sceneMesh;
-    this.stats.numMeshes++;
-    this._recordActiveBatchComponent(sceneMesh);
-    this.scene.events.onSceneMeshCreated.dispatch(this.scene, sceneMesh);
-    return {
-      ok: true,
-      value: sceneMesh
-    };
+    return this._instanceFactory.createMesh(meshParams);
   }
   /**
    * @internal
@@ -86259,31 +87271,7 @@ var SceneModel = class {
    * Called by a {@link model!scene.SceneMesh | SceneMesh} when it is destroyed.
    */
   _destroyMesh(sceneMesh) {
-    const meshId = sceneMesh.id;
-    if (this.destroyed) {
-      throw new SDKInternalException(`Cannot destroy SceneMesh '${meshId}' - SceneModel already destroyed`);
-    }
-    const existing = this.meshes[meshId];
-    if (!existing) {
-      throw new SDKInternalException(`Cannot destroy SceneMesh '${meshId}' - SceneMesh not found in SceneModel`);
-    }
-    if (existing !== sceneMesh) {
-      throw new SDKInternalException(`Cannot destroy SceneMesh '${meshId}' - provided instance does not match stored mesh`);
-    }
-    if (existing.object) {
-      throw new SDKInternalException(
-        `Cannot destroy SceneMesh '${meshId}' - SceneMesh belongs to SceneObject '${existing.object.id}', which you need to destroy first`
-      );
-    }
-    if (existing.geometry) {
-      existing.geometry.numMeshes--;
-    }
-    if (existing.material) {
-      existing.material.numMeshes--;
-    }
-    delete this.meshes[meshId];
-    this.stats.numMeshes--;
-    this.scene.events.onSceneMeshDestroyed.dispatch(this.scene, existing);
+    this.scene.instances.remove(sceneMesh);
   }
   /**
    * Creates a variant set in this SceneModel.
@@ -86300,23 +87288,7 @@ var SceneModel = class {
    * validation fails.
    */
   createVariantSet(variantSetParams) {
-    const createError = this._assertCanCreate("createVariantSet");
-    if (createError) {
-      return createError;
-    }
-    const validation = this._validateVariantSetParams(variantSetParams);
-    if (validation) {
-      return validation;
-    }
-    const variantSet = new SceneVariantSet(this, variantSetParams);
-    this.variantSets[variantSet.id] = variantSet;
-    this._activeBatch?.variantSets.push(variantSet);
-    this._indexVariantSet(variantSet);
-    this.scene.events.onSceneVariantSetCreated.dispatch(this, variantSet);
-    return {
-      ok: true,
-      value: variantSet
-    };
+    return this.behaviors.createVariantSet(variantSetParams);
   }
   /**
    * Gets variant sets that reference a SceneObject.
@@ -86326,7 +87298,7 @@ var SceneModel = class {
    * variant.
    */
   getVariantSetsForObject(objectId) {
-    return Array.from(this._variantSetsByObjectId.get(objectId) ?? []);
+    return this.behaviors.getVariantSetsForObject(objectId);
   }
   /**
    * @internal
@@ -86334,199 +87306,7 @@ var SceneModel = class {
    * Called by {@link SceneVariantSet.destroy}.
    */
   _destroyVariantSet(variantSet) {
-    if (this.destroyed) {
-      throw new SDKInternalException(`Cannot destroy SceneVariantSet '${variantSet.id}' - SceneModel already destroyed`);
-    }
-    if (!this.variantSets[variantSet.id]) {
-      throw new SDKInternalException(`Cannot destroy SceneVariantSet '${variantSet.id}' - SceneVariantSet not found in SceneModel`);
-    }
-    this._unindexVariantSet(variantSet);
-    delete this.variantSets[variantSet.id];
-    this.scene.events.onSceneVariantSetDestroyed.dispatch(this, variantSet);
-  }
-  _validateVariantSetParams(variantSetParams) {
-    if (!variantSetParams) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createVariantSet] Missing required 'variantSetParams'."
-      });
-    }
-    if (!variantSetParams.id) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createVariantSet] Missing required 'id'."
-      });
-    }
-    if (this.variantSets[variantSetParams.id]) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createVariantSet] SceneVariantSet already exists with this ID: '${variantSetParams.id}'`
-      });
-    }
-    if (!variantSetParams.defaultVariantId) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createVariantSet] Missing required 'defaultVariantId'."
-      });
-    }
-    if (!Array.isArray(variantSetParams.variants) || variantSetParams.variants.length === 0) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createVariantSet] Expected at least one variant."
-      });
-    }
-    const selection = variantSetParams.selection;
-    if (selection) {
-      if (selection.strategy !== "projectedSize") {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createVariantSet] Unsupported selection strategy: '${selection.strategy}'`
-        });
-      }
-      if (selection.hysteresisPixels !== void 0 && (!Number.isFinite(selection.hysteresisPixels) || selection.hysteresisPixels < 0)) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: "[SceneModel.createVariantSet] selection.hysteresisPixels must be a finite non-negative number."
-        });
-      }
-    }
-    const variantIds = /* @__PURE__ */ new Set();
-    for (let i = 0, len = variantSetParams.variants.length; i < len; i++) {
-      const variant = variantSetParams.variants[i];
-      const result = this._validateVariantParams(variantSetParams.id, variant, variantIds, variant.id === variantSetParams.defaultVariantId);
-      if (result) {
-        return result;
-      }
-    }
-    if (!variantIds.has(variantSetParams.defaultVariantId)) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createVariantSet] defaultVariantId '${variantSetParams.defaultVariantId}' does not reference a variant in SceneVariantSet '${variantSetParams.id}'.`
-      });
-    }
-    return null;
-  }
-  _validateVariantParams(variantSetId, variantParams, variantIds, isDefaultVariant) {
-    if (!variantParams || !variantParams.id) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createVariantSet] Variant in SceneVariantSet '${variantSetId}' is missing required 'id'.`
-      });
-    }
-    if (variantIds.has(variantParams.id)) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createVariantSet] Duplicate variant ID '${variantParams.id}' in SceneVariantSet '${variantSetId}'.`
-      });
-    }
-    variantIds.add(variantParams.id);
-    if (!Array.isArray(variantParams.objectIds)) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createVariantSet] Variant '${variantParams.id}' in SceneVariantSet '${variantSetId}' must provide SceneObject IDs.`
-      });
-    }
-    if (isDefaultVariant && variantParams.objectIds.length === 0) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createVariantSet] Default variant '${variantParams.id}' in SceneVariantSet '${variantSetId}' must reference at least one SceneObject.`
-      });
-    }
-    const objectIds = /* @__PURE__ */ new Set();
-    for (let i = 0, len = variantParams.objectIds.length; i < len; i++) {
-      const objectId = variantParams.objectIds[i];
-      if (!objectId) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createVariantSet] Variant '${variantParams.id}' in SceneVariantSet '${variantSetId}' has an empty SceneObject ID.`
-        });
-      }
-      if (objectIds.has(objectId)) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createVariantSet] Variant '${variantParams.id}' in SceneVariantSet '${variantSetId}' references SceneObject '${objectId}' more than once.`
-        });
-      }
-      objectIds.add(objectId);
-      if (!this.objects[objectId]) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createVariantSet] SceneObject not found: '${objectId}'`
-        });
-      }
-    }
-    const range = variantParams.range;
-    if (range) {
-      const minPixels = range.minPixels;
-      const maxPixels = range.maxPixels;
-      if (minPixels !== void 0 && (!Number.isFinite(minPixels) || minPixels < 0)) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createVariantSet] Variant '${variantParams.id}' range.minPixels must be a finite non-negative number.`
-        });
-      }
-      if (maxPixels !== void 0 && (!Number.isFinite(maxPixels) || maxPixels < 0)) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createVariantSet] Variant '${variantParams.id}' range.maxPixels must be a finite non-negative number.`
-        });
-      }
-      if (minPixels !== void 0 && maxPixels !== void 0 && minPixels > maxPixels) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createVariantSet] Variant '${variantParams.id}' has contradictory projected-size range.`
-        });
-      }
-    }
-    return null;
-  }
-  _indexVariantSet(variantSet) {
-    for (const variantId in variantSet.variants) {
-      const variant = variantSet.variants[variantId];
-      for (let i = 0, len = variant.objectIds.length; i < len; i++) {
-        const objectId = variant.objectIds[i];
-        let variantSets = this._variantSetsByObjectId.get(objectId);
-        if (!variantSets) {
-          variantSets = /* @__PURE__ */ new Set();
-          this._variantSetsByObjectId.set(objectId, variantSets);
-        }
-        variantSets.add(variantSet);
-      }
-    }
-  }
-  _unindexVariantSet(variantSet) {
-    for (const variantId in variantSet.variants) {
-      const variant = variantSet.variants[variantId];
-      for (let i = 0, len = variant.objectIds.length; i < len; i++) {
-        const objectId = variant.objectIds[i];
-        const variantSets = this._variantSetsByObjectId.get(objectId);
-        if (!variantSets) {
-          continue;
-        }
-        variantSets.delete(variantSet);
-        if (variantSets.size === 0) {
-          this._variantSetsByObjectId.delete(objectId);
-        }
-      }
-    }
+    return this.behaviors._destroyVariantSet(variantSet);
   }
   /**
    * Creates a new {@link model!scene.SceneObject | SceneObject}.
@@ -86567,77 +87347,14 @@ var SceneModel = class {
    *   - A specified {@link model!scene.SceneMesh | SceneMesh} already belongs to an existing {@link model!scene.SceneObject | SceneObject}.
    */
   createObject(objectParams) {
-    const {
-      id,
-      meshIds,
-      layerId,
-      originalSystemId
-    } = objectParams;
-    const createError = this._assertCanCreate("createObject");
-    if (createError) {
-      return createError;
-    }
-    if (!meshIds || meshIds.length === 0) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: "[SceneModel.createObject] No meshes specified"
-      });
-    }
-    const objectId = this.globalizedIds ? `${this.id}.${id}` : id;
-    if (this.scene.objects[objectId]) {
-      return this.scene.logError({
-        ok: false,
-        type: 2 /* InvalidInput */,
-        error: `[SceneModel.createObject] SceneObject already exists: '${objectId}'`
-      });
-    }
-    const meshes = [];
-    for (let meshIdIdx = 0, meshIdLen = meshIds.length; meshIdIdx < meshIdLen; meshIdIdx++) {
-      const meshId = meshIds[meshIdIdx];
-      const mesh = this.meshes[meshId];
-      if (!mesh) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createObject] SceneMesh not found: '${meshId}'`
-        });
-      }
-      if (mesh.object) {
-        return this.scene.logError({
-          ok: false,
-          type: 2 /* InvalidInput */,
-          error: `[SceneModel.createObject] SceneMesh '${meshId}' already belongs to existing SceneObject '${mesh.object.id}'`
-        });
-      }
-      meshes.push(mesh);
-    }
-    const sceneObject = new SceneObject({
-      id: objectId,
-      originalSystemId,
-      layerId: this.layerId || layerId,
-      clippable: objectParams.clippable,
-      model: this,
-      meshes
-    });
-    for (let i = 0, len = meshes.length; i < len; i++) {
-      const mesh = meshes[i];
-      mesh.object = sceneObject;
-    }
-    this.objects[objectId] = sceneObject;
-    this.stats.numObjects++;
-    this._recordActiveBatchComponent(sceneObject);
-    this.scene._registerObject(sceneObject);
-    return {
-      ok: true,
-      value: sceneObject
-    };
+    return this._instanceFactory.createObject(objectParams);
   }
   /**
    * Marks this transform globally dirty and propagates that state to all descendants.
    * @internal
    */
   setWorldMatrixDirty() {
+    this.rootFrame?.invalidate();
     if (Object.keys(this.lights).length) this.scene._lightingChanged();
     for (const box of Object.values(this.clipBoxes)) if (!box.parentTransform) box._changed();
     for (const id in this.transforms) {
@@ -86653,28 +87370,7 @@ var SceneModel = class {
    * Called by a {@link model!scene.SceneObject | SceneObject} when it is destroyed.
    */
   _destroyObject(sceneObject) {
-    const objectId = sceneObject.id;
-    if (this.destroyed) {
-      throw new SDKInternalException(`Cannot destroy SceneObject '${objectId}' - SceneModel already destroyed`);
-    }
-    if (!this.objects[objectId]) {
-      throw new SDKInternalException(`Cannot destroy SceneObject '${objectId}' - SceneObject not found in SceneModel`);
-    }
-    const variantSets = this.getVariantSetsForObject(objectId);
-    for (let i = 0, len = variantSets.length; i < len; i++) {
-      const variantSet = variantSets[i];
-      if (!variantSet.destroyed) {
-        variantSet.destroy();
-      }
-    }
-    const meshes = sceneObject.meshes;
-    for (let i = 0, len = meshes.length; i < len; i++) {
-      const mesh = meshes[i];
-      mesh.object = null;
-    }
-    delete this.objects[objectId];
-    this.stats.numObjects--;
-    this.scene._deregisterObject(sceneObject);
+    this.scene.instances.remove(sceneObject);
   }
   /**
    * Creates components in this SceneModel from {@link SceneModelParams}.
@@ -86729,7 +87425,9 @@ var SceneModel = class {
         for (let i = 0, len = sceneModelParams.transforms.length; i < len; i++) {
           const transformParams = sceneModelParams.transforms[i];
           if (transformParams.parentTransformId) {
-            const res = track(this.transforms[transformParams.id].setParentTransformId(transformParams.parentTransformId));
+            const res = track(
+              this.transforms[transformParams.id].setParentTransformId(transformParams.parentTransformId)
+            );
             if (!res.ok) return res;
           }
         }
@@ -86801,7 +87499,11 @@ var SceneModel = class {
         value: void 0
       };
     } catch (error) {
-      failure = { ok: false, type: 2 /* InvalidInput */, error: String(error) };
+      failure = {
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: String(error)
+      };
       return failure;
     } finally {
       try {
@@ -86811,7 +87513,11 @@ var SceneModel = class {
           this._loadingMode = loadingMode;
           this._updateMode = updateMode;
           if (cleanup.ok === false) {
-            return { ok: false, type: cleanup.type, error: `${failure?.ok === false ? failure.error : "Population failed"}; ${cleanup.error}` };
+            return {
+              ok: false,
+              type: cleanup.type,
+              error: `${failure?.ok === false ? failure.error : "Population failed"}; ${cleanup.error}`
+            };
           }
         }
       } finally {
@@ -86823,111 +87529,21 @@ var SceneModel = class {
    * Gets this SceneModel as {@link SceneModelParams}.
    *
    * @remarks
-   * Currently serializes: `transforms`, `geometriesCompressed`, `meshes`, and `objects`.
-   * (Textures and materials are intentionally omitted/commented.)
+   * Includes instance state and its resource dependency closure by default.
+   * Callers retaining the original resources can omit their payloads explicitly.
    *
    * See {@link model!scene | @xeokit/sdk/model/scene} for usage.
    */
-  toParams() {
-    if (this.destroyed) {
-      return this.scene.logError({
-        ok: false,
-        type: 1 /* InvalidOperation */,
-        error: "[SceneModel.toParams] SceneModel already destroyed"
-      });
-    }
-    const sceneModelParams = {
-      id: this.id,
-      coordinateSystem: this.coordinateSystem.toParams(),
-      dataResources: Object.values(this.dataResources).map((resource) => resource.toParams()),
-      representations: Object.values(this.representations).map((representation) => representation.toParams()),
-      scratchpad: this.scratchpad,
-      loadingMode: this.loadingMode,
-      sealed: this.sealed,
-      updateMode: this.updateMode,
-      lights: Object.values(this.lights).map((light) => {
-        const result = light.toParams();
-        if (result.ok === false) throw new Error(result.error);
-        return result.value;
-      }),
-      clipBoxes: [],
-      geometriesCompressed: [],
-      textures: [],
-      materials: [],
-      transforms: [],
-      meshes: [],
-      objects: [],
-      variantSets: [],
-      animations: []
-    };
-    for (const key in this.geometries) {
-      const res = this.geometries[key].toParams();
-      if (!res.ok) {
-        return res;
-      }
-      sceneModelParams.geometriesCompressed.push(res.value);
-    }
-    for (const box of Object.values(this.clipBoxes)) {
-      const result = box.toParams();
-      if (!result.ok) return result;
-      sceneModelParams.clipBoxes.push(result.value);
-    }
-    for (const key in this.meshes) {
-      const res = this.meshes[key].toParams();
-      if (!res.ok) {
-        return res;
-      }
-      sceneModelParams.meshes.push(res.value);
-    }
-    for (const key in this.objects) {
-      const res = this.objects[key].toParams();
-      if (!res.ok) {
-        return res;
-      }
-      sceneModelParams.objects.push(res.value);
-    }
-    for (const key in this.variantSets) {
-      sceneModelParams.variantSets.push(this.variantSets[key].toParams());
-    }
-    for (const key in this.animations) {
-      const res = this.animations[key].toParams();
-      if (!res.ok) {
-        return res;
-      }
-      sceneModelParams.animations.push(res.value);
-    }
-    for (const key in this.transforms) {
-      const res = this.transforms[key].toParams();
-      if (!res.ok) {
-        return res;
-      }
-      sceneModelParams.transforms.push(res.value);
-    }
-    for (const key in this.textures) {
-      const res = this.textures[key].toParams();
-      if (!res.ok) {
-        return res;
-      }
-      sceneModelParams.textures.push(res.value);
-    }
-    for (const key in this.materials) {
-      const res = this.materials[key].toParams();
-      if (!res.ok) {
-        return res;
-      }
-      sceneModelParams.materials.push(res.value);
-    }
-    return {
-      ok: true,
-      value: sceneModelParams
-    };
+  toParams(options) {
+    return sceneSourceToParams(this, options);
   }
   /**
    * Destroys this SceneModel.
    *
    * - Fires {@link SceneEvents.onSceneModelDestroyed | SceneEvents.onSceneModelDestroyed}.
    * - Removes this SceneModel from its {@link model!scene.Scene | Scene}.
-   * - Destroys all components created within this SceneModel.
+   * - Destroys this document's instances and releases its resource bindings.
+   *   Resources remain alive while another consumer or lease uses them.
    * - Fails before modifying anything if another model references an owned
    *   clip box. Detach those consumers first, or use Scene.clear for all models.
    */
@@ -86939,6 +87555,48 @@ var SceneModel = class {
         error: "[SceneModel.destroy] SceneModel already destroyed"
       });
     }
+    if (!this.scene._clearing) {
+      for (const object of Object.values(this.objects)) {
+        const dependent = this.scene.getVariantSetsForObject(object.id).find((variant) => variant.model !== this);
+        if (dependent)
+          return this.scene.logError({
+            ok: false,
+            type: 1 /* InvalidOperation */,
+            error: `Variant '${dependent.uniqueId}' still references object '${object.id}'`
+          });
+      }
+      for (const target of [...Object.values(this.meshes), ...Object.values(this.transforms)]) {
+        const dependent = this.scene.behaviors.getAnimationsForTarget(target).find((animation) => animation.model !== this);
+        if (dependent)
+          return this.scene.logError({
+            ok: false,
+            type: 1 /* InvalidOperation */,
+            error: `Animation '${dependent.uniqueId}' still references '${target.uniqueId}'`
+          });
+      }
+      for (const mesh of Object.values(this.meshes)) {
+        if (mesh.object && mesh.object.model !== this)
+          return this.scene.logError({
+            ok: false,
+            type: 1 /* InvalidOperation */,
+            error: `Detach mesh '${mesh.uniqueId}' from external object '${mesh.object.id}' before unloading`
+          });
+      }
+      for (const transform2 of Object.values(this.transforms)) {
+        const external = [
+          ...transform2.childTransforms,
+          ...transform2.childMeshes,
+          ...transform2._lights ?? [],
+          ...transform2._clipBoxes ?? []
+        ].find((child) => child.model !== this);
+        if (external)
+          return this.scene.logError({
+            ok: false,
+            type: 1 /* InvalidOperation */,
+            error: `Detach '${external.uniqueId}' from transform '${transform2.uniqueId}' before unloading`
+          });
+      }
+    }
     for (const box of Object.values(this.clipBoxes)) {
       if ([...box._meshes].some((mesh) => mesh.model !== this)) {
         return this.scene.logError({
@@ -86948,7 +87606,12 @@ var SceneModel = class {
         });
       }
     }
-    if (Object.values(this.lights).some((light) => light._domains.size)) return this.scene.logError({ ok: false, type: 1 /* InvalidOperation */, error: "Detach model lights from lighting domains before destroying their model" });
+    if (Object.values(this.lights).some((light) => light._domains.size))
+      return this.scene.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "Detach model lights from lighting domains before destroying their model"
+      });
     this._destroying = true;
     this._lightingDomain?._models.delete(this);
     this._lightingDomain = null;
@@ -86960,17 +87623,15 @@ var SceneModel = class {
         registry[key]?.destroy();
       }
     };
+    destroyAll(this.animations);
     destroyAll(this.objects);
     destroyAll(this.meshes);
     destroyAll(this.representations);
     destroyAll(this.dataResources);
-    destroyAll(this.animations);
     destroyAll(this.lights);
     destroyAll(this.clipBoxes);
     destroyAll(this.transforms);
-    destroyAll(this.materials);
-    destroyAll(this.geometries);
-    destroyAll(this.textures);
+    this.scene.assets.releaseDocument(this);
     this.destroyed = true;
     this._destroying = false;
     this.scene._destroyModel(this);
@@ -86984,6 +87645,7 @@ var SceneModel = class {
 // ../sdk-oct2/src/model/scene/SceneEvents.ts
 var import_strongly_typed_events2 = __toESM(require_dist8());
 var SceneEvents = class {
+  onSceneInstanceDocumentChanged;
   /**
    * A light, domain or inherited lighting assignment changed.
    */
@@ -87268,13 +87930,20 @@ var SceneEvents = class {
    * Emits an event each time a {@link model!scene.animation.SceneAnimation | SceneAnimation} is destroyed within the {@link model!scene.Scene | Scene}.
    */
   onSceneAnimationDestroyed;
-  /** Emitted after a representation is created, changed or removed; payload is its owning model. */
+  /**
+   * Emitted after a representation is created, changed or removed; payload is its owning model.
+   */
   onSceneRepresentationChanged;
-  /** Emitted after numerical resource creation, replacement or removal; inspect resource revisions for changes. */
+  /**
+   * Emitted after numerical resource creation, replacement or removal; inspect resource revisions for changes.
+   */
   onSceneDataResourceChanged;
-  /** Emitted when an existing mesh changes its representation binding, including removal of the binding. */
+  /**
+   * Emitted when an existing mesh changes its representation binding, including removal of the binding.
+   */
   onSceneMeshRepresentationChanged;
   constructor() {
+    this.onSceneInstanceDocumentChanged = new EventEmitter(new import_strongly_typed_events2.EventDispatcher());
     this.onSceneLightingChanged = new EventEmitter(new import_strongly_typed_events2.EventDispatcher());
     this.onSceneMeshLightingChanged = new EventEmitter(new import_strongly_typed_events2.EventDispatcher());
     this.onSceneMeshClipBoxChanged = new EventEmitter(new import_strongly_typed_events2.EventDispatcher());
@@ -87304,7 +87973,9 @@ var SceneEvents = class {
     this.onSceneModelCoordSystemBasisChanged = new EventEmitter(new import_strongly_typed_events2.EventDispatcher());
     this.onSceneModelCoordSystemOriginChanged = new EventEmitter(new import_strongly_typed_events2.EventDispatcher());
     this.onSceneModelCoordSystemUnitsChanged = new EventEmitter(new import_strongly_typed_events2.EventDispatcher());
-    this.onSceneModelCoordSystemScaleToMetersChanged = new EventEmitter(new import_strongly_typed_events2.EventDispatcher());
+    this.onSceneModelCoordSystemScaleToMetersChanged = new EventEmitter(
+      new import_strongly_typed_events2.EventDispatcher()
+    );
     this.onSceneModelCoordSystemUpdated = new EventEmitter(new import_strongly_typed_events2.EventDispatcher());
     this.onSceneObjectCreated = new EventEmitter(new import_strongly_typed_events2.EventDispatcher());
     this.onSceneObjectMeshAdded = new EventEmitter(new import_strongly_typed_events2.EventDispatcher());
@@ -87379,6 +88050,7 @@ var SceneEvents = class {
     this.onSceneObjectMeshRemoved.clear();
     this.onSceneMeshMoved.clear();
     this.onSceneMeshMaterialChanged.clear();
+    this.onSceneInstanceDocumentChanged.clear();
     this.onSceneMeshColorChanged.clear();
     this.onSceneMeshMatrixChanged.clear();
     this.onSceneMeshOpacityChanged.clear();
@@ -87409,8 +88081,476 @@ var SceneEvents = class {
   }
 };
 
+// ../sdk-oct2/src/model/scene/assets/SceneAssetReference.ts
+function sceneAssetReferenceKey(value) {
+  if (!value || typeof value !== "object" || !["geometry", "material", "texture"].includes(value.kind) || [value.namespace, value.id, value.revision].some(
+    (part) => typeof part !== "string" || !part.trim() || part.length > 2048
+  ) || /^(latest|head|current)$/i.test(value.revision) || value.variant !== void 0 && (typeof value.variant !== "string" || !value.variant || value.variant.length > 2048) || value.sha256 !== void 0 && !/^[a-f0-9]{64}$/.test(value.sha256)) {
+    throw new Error("Expected a library namespace, asset kind, ID and pinned revision");
+  }
+  return JSON.stringify([
+    1,
+    value.namespace,
+    value.kind,
+    value.id,
+    value.revision,
+    value.variant ?? null,
+    value.sha256 ?? null
+  ]);
+}
+
+// ../sdk-oct2/src/model/scene/SceneAssets.ts
+var SceneAssets = class {
+  constructor(scene) {
+    this.scene = scene;
+  }
+  scene;
+  generation = 0;
+  geometries = /* @__PURE__ */ Object.create(null);
+  materials = /* @__PURE__ */ Object.create(null);
+  textures = /* @__PURE__ */ Object.create(null);
+  external = /* @__PURE__ */ new Map();
+  references = /* @__PURE__ */ new Map();
+  fingerprints = /* @__PURE__ */ new Map();
+  ownership = /* @__PURE__ */ new Map();
+  primitiveCounts = /* @__PURE__ */ new Map();
+  /**
+   * Measures resident CPU payloads on demand; shared backing buffers count once.
+   */
+  get statistics() {
+    const buffers = /* @__PURE__ */ new Set();
+    let retainedBytes = 0, leases = 0, documentBindings = 0;
+    const visit = (value) => {
+      if (ArrayBuffer.isView(value)) {
+        if (!buffers.has(value.buffer)) {
+          buffers.add(value.buffer);
+          retainedBytes += value.buffer.byteLength;
+        }
+      } else if (value instanceof ArrayBuffer) {
+        if (!buffers.has(value)) {
+          buffers.add(value);
+          retainedBytes += value.byteLength;
+        }
+      } else if (Array.isArray(value)) {
+        if (value.length && typeof value[0] === "number") retainedBytes += value.length * 8;
+        else value.forEach(visit);
+      } else if (value && typeof value === "object") {
+        for (const item of Object.values(value)) visit(item);
+      }
+    };
+    for (const [asset, owner] of this.ownership) {
+      leases += owner.leases;
+      for (const aliases of owner.documents.values()) documentBindings += aliases.size;
+      const record = asset;
+      const fields = owner.kind === "geometries" ? [
+        "positionsCompressed",
+        "normalsCompressed",
+        "indices",
+        "edgeIndices",
+        "colorsCompressed",
+        "texCoordsCompressed",
+        "aabb",
+        "framesCompressed",
+        "vertexStatesCompressed",
+        "morphTargets",
+        "scales",
+        "rotations"
+      ] : owner.kind === "textures" ? ["buffers", "imageData"] : [];
+      for (const field of fields) visit(record[field]);
+    }
+    return {
+      resources: this.ownership.size,
+      externalResources: this.external.size,
+      leases,
+      documentBindings,
+      retainedBytes,
+      backingBuffers: buffers.size
+    };
+  }
+  /**
+   * Document helpers retain their existing local names. The immutable uniqueId
+   * is the scene lookup key and does not change when a document is unloaded.
+   */
+  identity(id, model) {
+    return model ? `${model.id}__${id}` : id;
+  }
+  register(kind, asset, model, reference) {
+    const registry = this[kind];
+    if (registry[asset.uniqueId]) {
+      return this.failure(`A ${kind} resource already uses scene ID '${asset.uniqueId}'`);
+    }
+    if (model && (model.destroyed || model.destroying || model[kind][asset.id])) {
+      return this.failure(`Cannot register ${kind} '${asset.id}' in this document`);
+    }
+    if (reference) {
+      const key = sceneAssetReferenceKey(reference);
+      if (this.external.has(key)) return this.failure("An exact external identity is already resident");
+      this.external.set(key, asset);
+      this.references.set(asset, Object.freeze({ ...reference }));
+      const fields = kind === "materials" ? ["colorTexture", "metallicRoughnessTexture", "normalsTexture", "occlusionTexture", "emissiveTexture"] : kind === "textures" ? [
+        "buffers",
+        "compressed",
+        "mediaType",
+        "minFilter",
+        "magFilter",
+        "wrapS",
+        "wrapT",
+        "wrapR",
+        "flipY",
+        "encoding",
+        "preloadColor",
+        "mipmap"
+      ] : [
+        "aabb",
+        "primitive",
+        "framesCompressed",
+        "vertexStatesCompressed",
+        "morphTargets",
+        "texCoordsCompressed",
+        "uvsDecompressMatrix",
+        "colorsCompressed",
+        "edgeIndices",
+        "scales",
+        "rotations"
+      ];
+      for (const field of fields) {
+        const descriptor = Object.getOwnPropertyDescriptor(asset, field);
+        if (descriptor && "value" in descriptor) Object.defineProperty(asset, field, { ...descriptor, writable: false });
+      }
+    }
+    registry[asset.uniqueId] = asset;
+    this.ownership.set(asset, { kind, applicationOwned: !model, leases: 0, documents: /* @__PURE__ */ new Map() });
+    if (model) {
+      this.bind(model, kind, asset.id, asset);
+      model._recordActiveBatchComponent(asset);
+    }
+    if (kind === "geometries") this.countPrimitive(asset, 1);
+    if (kind === "geometries") this.scene.events.onSceneGeometryCreated.dispatch(this.scene, asset);
+    if (kind === "materials") this.scene.events.onSceneMaterialCreated.dispatch(this.scene, asset);
+    if (kind === "textures") this.scene.events.onSceneTextureCreated.dispatch(this.scene, asset);
+    return { ok: true, value: asset };
+  }
+  bind(model, kind, alias, asset) {
+    const owner = this.ownership.get(asset);
+    if (!owner || owner.kind !== kind || asset.destroyed || asset.scene !== model.scene || model.destroyed || model.destroying) {
+      return this.failure(`Cannot bind ${kind} '${alias}' to this document`);
+    }
+    const bindings = model[kind];
+    if (!alias || bindings[alias] && bindings[alias] !== asset) {
+      return this.failure(`Document ${kind} alias '${alias}' is already used or invalid`);
+    }
+    let aliases = owner.documents.get(model);
+    if (!aliases) {
+      aliases = /* @__PURE__ */ new Set();
+      owner.documents.set(model, aliases);
+      this.adjustStats(model, kind, asset, 1);
+    }
+    aliases.add(alias);
+    bindings[alias] = asset;
+    return { ok: true, value: asset };
+  }
+  /**
+   * Releasing a document never destroys a resource still used elsewhere.
+   */
+  releaseDocument(model) {
+    const resources = /* @__PURE__ */ new Set([
+      ...Object.values(model.materials),
+      ...Object.values(model.geometries),
+      ...Object.values(model.textures)
+    ]);
+    for (const asset of resources) {
+      const owner = this.ownership.get(asset);
+      const aliases = owner?.documents.get(model);
+      if (!owner || !aliases) continue;
+      for (const alias of aliases) delete model[owner.kind][alias];
+      owner.documents.delete(model);
+      this.adjustStats(model, owner.kind, asset, -1);
+    }
+    for (const asset of resources) {
+      this.collect(asset);
+      if (asset.model === model) asset.model = null;
+    }
+  }
+  /**
+   * A rolled-back creation releases its owner, not another load's consumers.
+   * Surviving consumers retain the same canonical scene resource.
+   */
+  rollbackCreation(asset) {
+    const owner = this.ownership.get(asset);
+    if (!owner || asset.destroyed) return { ok: true, value: void 0 };
+    const model = asset.model;
+    if (model) {
+      const aliases = owner.documents.get(model);
+      if (aliases) {
+        for (const alias of aliases) delete model[owner.kind][alias];
+        owner.documents.delete(model);
+        this.adjustStats(model, owner.kind, asset, -1);
+      }
+    } else {
+      owner.applicationOwned = false;
+    }
+    this.collect(asset);
+    if (asset.model === model) asset.model = null;
+    return { ok: true, value: void 0 };
+  }
+  /**
+   * Document aliases that currently retain this asset. The indexes are borrowed
+   * for accounting and inspection; callers must not modify them.
+   */
+  documents(asset) {
+    return this.ownership.get(asset)?.documents ?? /* @__PURE__ */ new Map();
+  }
+  /**
+   * Protects a complete resource while an asynchronous load prepares consumers.
+   * The returned release function is safe to call more than once.
+   */
+  retain(asset) {
+    const owner = this.ownership.get(asset);
+    if (!owner) throw new Error("Cannot retain an unregistered scene asset");
+    owner.leases++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (this.ownership.get(asset) !== owner || owner.leases === 0) return;
+      owner.leases--;
+      this.collect(asset);
+    };
+  }
+  /**
+   * Resolves an exact pinned identity without creating another payload cache.
+   */
+  findExternal(reference) {
+    return this.external.get(sceneAssetReferenceKey(reference));
+  }
+  reference(asset) {
+    return this.references.get(asset);
+  }
+  fingerprint(asset, value) {
+    if (value !== void 0) this.fingerprints.set(asset, value);
+    return this.fingerprints.get(asset);
+  }
+  assertMutable(asset) {
+    if (this.references.has(asset))
+      return this.failure(`Library asset '${asset.uniqueId}' is immutable; create an editable copy first`);
+    return { ok: true, value: void 0 };
+  }
+  /**
+   * Drops the temporary application owner after a resolver has acquired a lease.
+   */
+  releaseApplicationOwnership(asset) {
+    const owner = this.ownership.get(asset);
+    if (owner) owner.applicationOwned = false;
+    this.collect(asset);
+  }
+  /**
+   * Releases one explicit document alias, without disturbing its other names.
+   */
+  unbind(model, kind, alias, asset) {
+    const owner = this.ownership.get(asset);
+    const aliases = owner?.documents.get(model);
+    if (!owner || !aliases?.delete(alias) || model[kind][alias] !== asset) return;
+    delete model[kind][alias];
+    if (!aliases.size) {
+      owner.documents.delete(model);
+      this.adjustStats(model, kind, asset, -1);
+    }
+    this.collect(asset);
+  }
+  canDestroy(asset) {
+    const owner = this.ownership.get(asset);
+    if (!owner) return this.failure(`Resource '${asset.uniqueId}' is not registered`);
+    if (owner.leases || owner.documents.size > 1 || owner.applicationOwned && owner.documents.size) {
+      return this.failure(`Resource '${asset.uniqueId}' is retained by another owner or pending load`);
+    }
+    return { ok: true, value: void 0 };
+  }
+  remove(asset) {
+    const owner = this.ownership.get(asset);
+    if (!owner) return;
+    for (const [model, aliases] of owner.documents) {
+      for (const alias of aliases) delete model[owner.kind][alias];
+      this.adjustStats(model, owner.kind, asset, -1);
+    }
+    owner.documents.clear();
+    delete this[owner.kind][asset.uniqueId];
+    this.ownership.delete(asset);
+    const reference = this.references.get(asset);
+    if (reference) this.external.delete(sceneAssetReferenceKey(reference));
+    this.references.delete(asset);
+    this.fingerprints.delete(asset);
+    if (owner.kind === "materials") {
+      const material = asset;
+      const textures = this.materialTextures(material);
+      for (const texture of textures) {
+        texture.numMaterials--;
+        texture.materials.delete(material);
+      }
+      this.scene.events.onSceneMaterialDestroyed.dispatch(this.scene, material);
+      for (const texture of textures) this.collect(texture);
+    } else if (owner.kind === "geometries") {
+      this.countPrimitive(asset, -1);
+      this.scene.events.onSceneGeometryDestroyed.dispatch(this.scene, asset);
+    } else {
+      this.scene.events.onSceneTextureDestroyed.dispatch(this.scene, asset);
+    }
+  }
+  containsPrimitive(primitive) {
+    return (this.primitiveCounts.get(primitive) ?? 0) > 0;
+  }
+  /**
+   * Reconciles the primitive index after an explicit topology edit.
+   */
+  geometryPrimitiveChanged(before, after) {
+    if (before === after) return;
+    const previous = (this.primitiveCounts.get(before) ?? 0) - 1;
+    if (previous > 0) this.primitiveCounts.set(before, previous);
+    else this.primitiveCounts.delete(before);
+    this.primitiveCounts.set(after, (this.primitiveCounts.get(after) ?? 0) + 1);
+  }
+  countPrimitive(geometry, amount) {
+    const count = (this.primitiveCounts.get(geometry.primitive) ?? 0) + amount;
+    if (count) this.primitiveCounts.set(geometry.primitive, count);
+    else this.primitiveCounts.delete(geometry.primitive);
+  }
+  collect(asset) {
+    const owner = this.ownership.get(asset);
+    if (!owner || owner.applicationOwned || owner.leases || owner.documents.size || asset.destroyed) return;
+    const references = owner.kind === "textures" ? asset.numMaterials : asset.numMeshes;
+    if (!references) asset.destroy();
+  }
+  textureSizeChanged(texture, difference) {
+    for (const model of this.ownership.get(texture)?.documents.keys() ?? []) model.stats.textureBytes += difference;
+  }
+  materialTextures(material) {
+    return materialTextures(material);
+  }
+  clear() {
+    this.generation++;
+    for (const owner of this.ownership.values()) {
+      owner.applicationOwned = false;
+      owner.leases = 0;
+    }
+    for (const asset of [
+      ...Object.values(this.materials),
+      ...Object.values(this.geometries),
+      ...Object.values(this.textures)
+    ]) {
+      this.collect(asset);
+    }
+  }
+  adjustStats(model, kind, asset, amount) {
+    if (kind === "materials") model.stats.numMaterials += amount;
+    if (kind === "textures") {
+      model.stats.numTextures += amount;
+      model.stats.textureBytes += asset.textureBytes * amount;
+    }
+    if (kind === "geometries") {
+      const geometry = asset;
+      model.stats.numGeometries += amount;
+      model.stats.numVertices += geometry.positionsCompressed.length / 3 * amount;
+      model._bumpPrimitiveCount(geometry.primitive, amount);
+      if (geometry.indices && geometry.primitive === TrianglesPrimitive)
+        model.stats.numTriangles += geometry.indices.length / 3 * amount;
+      if (geometry.indices && geometry.primitive === LinesPrimitive)
+        model.stats.numLines += geometry.indices.length / 2 * amount;
+      if (!geometry.indices && geometry.primitive === PointsPrimitive)
+        model.stats.numPoints += geometry.positionsCompressed.length / 3 * amount;
+    }
+  }
+  failure(error) {
+    return this.scene.logError({ ok: false, type: 1 /* InvalidOperation */, error: `[SceneAssets] ${error}` });
+  }
+};
+
 // ../sdk-oct2/src/model/scene/Scene.ts
 var Scene = class {
+  /**
+   * Transfers lifetime membership without changing placement or runtime IDs.
+   */
+  moveToModel(instance, model) {
+    return this.instances.move(instance, model);
+  }
+  animations = /* @__PURE__ */ Object.create(null);
+  variantSets = /* @__PURE__ */ Object.create(null);
+  behaviors = new SceneBehaviors(this);
+  createAnimation(animationParams) {
+    return this.behaviors.createAnimation(animationParams);
+  }
+  _destroyAnimation(animation) {
+    return this.behaviors._destroyAnimation(animation);
+  }
+  createVariantSet(variantSetParams) {
+    return this.behaviors.createVariantSet(variantSetParams);
+  }
+  getVariantSetsForObject(objectId) {
+    return this.behaviors.getVariantSetsForObject(objectId);
+  }
+  _destroyVariantSet(variantSet) {
+    return this.behaviors._destroyVariantSet(variantSet);
+  }
+  representations = /* @__PURE__ */ Object.create(null);
+  dataResources = /* @__PURE__ */ Object.create(null);
+  _definitions = new SceneDefinitions(this);
+  createDataResource(params) {
+    return this._definitions.createDataResource(params);
+  }
+  updateDataResource(id, update) {
+    return this._definitions.updateDataResource(id, update);
+  }
+  destroyDataResource(id) {
+    return this._definitions.destroyDataResource(id);
+  }
+  createRepresentation(params) {
+    return this._definitions.createRepresentation(params);
+  }
+  updateRepresentation(id, update) {
+    return this._definitions.updateRepresentation(id, update);
+  }
+  destroyRepresentation(id) {
+    return this._definitions.destroyRepresentation(id);
+  }
+  _rollbackDataResource(component) {
+    return this._definitions._rollbackDataResource(component);
+  }
+  _rollbackRepresentation(component) {
+    return this._definitions._rollbackRepresentation(component);
+  }
+  instances = new SceneInstances(this);
+  meshes = this.instances.meshes;
+  transforms = this.instances.transforms;
+  rootFrame;
+  _instanceFactory = new SceneInstanceFactory(this);
+  createMesh(params) {
+    return this._instanceFactory.createMesh(params);
+  }
+  createObject(params) {
+    return this._instanceFactory.createObject(params);
+  }
+  createTransform(params) {
+    return this._instanceFactory.createTransform(params);
+  }
+  /**
+   * Resident resource definitions. Document collections contain aliases to these
+   * objects; sharing never duplicates their geometry arrays or texture pixels.
+   */
+  assets = new SceneAssets(this);
+  geometries = this.assets.geometries;
+  materials = this.assets.materials;
+  textures = this.assets.textures;
+  _assetFactory = new SceneAssetFactory(this);
+  createGeometry(params) {
+    return this._assetFactory.geometry.createGeometry(params);
+  }
+  createGeometryCompressed(params) {
+    return this._assetFactory.geometry.createGeometryCompressed(params);
+  }
+  createMaterial(params) {
+    return this._assetFactory.createMaterial(params);
+  }
+  createTexture(params) {
+    return this._assetFactory.createTexture(params);
+  }
   /**
    * Runtime lighting contexts, shared across models and keyed by domain ID.
    */
@@ -87429,7 +88569,12 @@ var Scene = class {
    */
   createLightingDomain(params) {
     const error = this.destroyed || this._clearing ? "Scene is destroyed or clearing" : LightingDomain.validate(this, params);
-    if (error || Object.prototype.hasOwnProperty.call(this.lightingDomains, params.id)) return this.logError({ ok: false, type: 2 /* InvalidInput */, error: error ?? `Lighting domain already exists: ${params.id}` });
+    if (error || Object.prototype.hasOwnProperty.call(this.lightingDomains, params.id))
+      return this.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: error ?? `Lighting domain already exists: ${params.id}`
+      });
     const used = new Set(Object.values(this.lightingDomains).map((domain2) => domain2._slot));
     let slot = 1;
     while (used.has(slot)) slot++;
@@ -87442,8 +88587,13 @@ var Scene = class {
    * Creates a scene-coordinate light resource. Domains select its receivers.
    */
   createLight(params) {
-    const error = this.destroyed || this._clearing ? "Scene is destroyed or clearing" : SceneLight.validate(null, params);
-    if (error || this.lights[JSON.stringify([null, params.id])]) return this.logError({ ok: false, type: 2 /* InvalidInput */, error: error ?? `Light already exists: ${params.id}` });
+    const error = this.destroyed || this._clearing ? "Scene is destroyed or clearing" : SceneLight.validate(null, params, this);
+    if (error || this.lights[JSON.stringify([null, params.id])])
+      return this.logError({
+        ok: false,
+        type: 2 /* InvalidInput */,
+        error: error ?? `Light already exists: ${params.id}`
+      });
     const light = new SceneLight(this, null, params);
     this.lights[light.uniqueId] = light;
     this._lightingChanged();
@@ -87469,7 +88619,9 @@ var Scene = class {
    * @internal Prevents new cross-model dependencies while clearing contents.
    */
   _clearing = false;
-  /** Optional CPU schemas; independent of all renderer/plugin registries. */
+  /**
+   * Optional CPU schemas; independent of all renderer/plugin registries.
+   */
   representationSchemas = new RepresentationSchemaCatalog();
   /**
    * Unique ID of this Scene.
@@ -87533,6 +88685,7 @@ var Scene = class {
       },
       params?.coordinateSystem
     );
+    this.rootFrame = new SceneFrame(this.coordinateSystem, this.coordinateSystem);
     this.models = {};
     this.objects = {};
     this.logging = params?.logging ?? false;
@@ -87545,12 +88698,13 @@ var Scene = class {
    * Runtime boxes and external mesh bindings are not included in model exports.
    */
   createClipBox(params) {
-    if (this.destroyed || this._clearing) return this.logError({
-      ok: false,
-      type: 1 /* InvalidOperation */,
-      error: "[Scene.createClipBox] Scene is destroyed or clearing"
-    });
-    const error = SceneClipBox.validate(null, params) || (this.clipBoxes[SceneClipBox.key(null, params.id)] ? `Scene clip box already exists: ${params.id}` : null);
+    if (this.destroyed || this._clearing)
+      return this.logError({
+        ok: false,
+        type: 1 /* InvalidOperation */,
+        error: "[Scene.createClipBox] Scene is destroyed or clearing"
+      });
+    const error = SceneClipBox.validate(null, params, this) || (this.clipBoxes[SceneClipBox.key(null, params.id)] ? `Scene clip box already exists: ${params.id}` : null);
     if (error) return this.logError({ ok: false, type: 2 /* InvalidInput */, error });
     const box = new SceneClipBox(this, null, params);
     this.clipBoxes[box.uniqueId] = box;
@@ -87605,19 +88759,13 @@ var Scene = class {
     return { ok: true, value: sceneModel };
   }
   /**
-   * Returns `true` if any {@link model!scene.SceneModel | SceneModel} in this
-   * Scene currently holds at least one {@link model!scene.SceneGeometry | SceneGeometry}
+   * Returns `true` if this Scene currently holds at least one {@link model!scene.SceneGeometry | SceneGeometry}
    * of the given primitive type — e.g. `scene.containsPrimitive(GaussianSplatsPrimitive)`.
    *
-   * Backed by per-model live counts, so this is cheap to call (no geometry scan).
+   * Backed by scene-wide live counts, so this is cheap to call (no geometry scan).
    */
   containsPrimitive(primitive) {
-    for (const id in this.models) {
-      if (this.models[id].containsPrimitive(primitive)) {
-        return true;
-      }
-    }
-    return false;
+    return this.assets.containsPrimitive(primitive);
   }
   /**
    * Called internally when a {@link model!scene.SceneModel | SceneModel} is destroyed.
@@ -87630,18 +88778,24 @@ var Scene = class {
     this._deregisterObjects(sceneModel);
     this.events.onSceneModelDestroyed.dispatch(this, sceneModel);
   }
-  /** @private */
+  /**
+   * @private
+   */
   _deregisterObjects(model) {
     for (const id in model.objects) {
       this._deregisterObject(model.objects[id]);
     }
   }
-  /** @private */
+  /**
+   * @private
+   */
   _deregisterObject(sceneObject) {
     if (this.objects[sceneObject.id] === sceneObject) delete this.objects[sceneObject.id];
     this.events.onSceneObjectDestroyed.dispatch(this, sceneObject);
   }
-  /** @private */
+  /**
+   * @private
+   */
   _registerObject(sceneObject) {
     this.objects[sceneObject.id] = sceneObject;
     this.events.onSceneObjectCreated.dispatch(this, sceneObject);
@@ -87697,9 +88851,19 @@ var Scene = class {
         for (const model of [...domain._models]) model.setLightingDomain(null);
         domain.destroy();
       }
+      for (const transform2 of Object.values(this.transforms)) transform2.setParentTransform(null);
+      for (const mesh of Object.values(this.meshes)) mesh.setParentTransform(null);
+      for (const animation of Object.values(this.animations)) animation.destroy();
+      for (const variant of Object.values(this.variantSets)) variant.destroy();
+      for (const object of Object.values(this.objects)) object.destroy();
       for (const model of Object.values(this.models)) model.destroy();
+      for (const mesh of Object.values(this.meshes)) mesh.destroy();
       for (const light of Object.values(this.lights)) light.destroy();
       for (const box of Object.values(this.clipBoxes)) box.destroy();
+      for (const transform2 of Object.values(this.transforms)) transform2.destroy();
+      for (const representation of Object.values(this.representations)) representation.destroy();
+      for (const resource of Object.values(this.dataResources)) resource.destroy();
+      this.assets.clear();
     } finally {
       this._clearing = false;
     }
@@ -87725,33 +88889,494 @@ var Scene = class {
 };
 
 // ../sdk-oct2/src/model/scene/getMeshWorldMatrix.ts
-function getMeshWorldMatrix(sceneMesh, targetCoordinateSystem) {
-  const matrices = [];
-  matrices.push(sceneMesh.matrix);
-  let parentTransform = sceneMesh.parentTransform || null;
-  while (parentTransform) {
-    matrices.push(parentTransform.matrix);
-    parentTransform = parentTransform.parentTransform || null;
-  }
-  let result;
-  if (matrices.length === 1) {
-    result = sceneMesh.matrix;
-  } else {
-    result = createMat4Float64(matrices[matrices.length - 1]);
-    for (let i = matrices.length - 2; i >= 0; i--) {
-      result = mulMat4(result, matrices[i], createMat4Float64());
-    }
-  }
-  if (!targetCoordinateSystem) {
-    return result;
-  }
-  const sourceCoordinateSystem = sceneMesh.model.coordinateSystem;
-  const coordTransform = createCoordinateSystemTransform(
-    sourceCoordinateSystem,
-    targetCoordinateSystem,
+function getMeshWorldMatrix(mesh, targetCoordinateSystem) {
+  const conversion = createCoordinateSystemTransform(
+    mesh.scene.coordinateSystem,
+    targetCoordinateSystem ?? mesh.frame.source,
     createMat4Float64()
   );
-  return mulMat4(coordTransform, result, createMat4Float64());
+  return mulMat4(conversion, mesh.worldMatrix, createMat4Float64());
+}
+
+// ../sdk-oct2/src/model/scene/assets/SceneAssetWarning.ts
+function sceneAssetWarning(reference) {
+  return reference.sha256 ? void 0 : {
+    code: "SOURCE_HASH_UNAVAILABLE",
+    reference,
+    message: `Library ${reference.kind} '${reference.id}' has a pinned revision but no source SHA-256`
+  };
+}
+
+// ../sdk-oct2/src/model/scene/assets/SceneAssetLease.ts
+var SceneAssetLease = class {
+  constructor(assets, releases) {
+    this.assets = assets;
+    this.releases = releases;
+    const seen = /* @__PURE__ */ new Set();
+    const warnings = [];
+    const visit = (asset) => {
+      const reference = asset.externalReference;
+      if (!reference) return;
+      const key = sceneAssetReferenceKey(reference);
+      if (seen.has(key)) return;
+      seen.add(key);
+      const warning = sceneAssetWarning(reference);
+      if (warning) warnings.push(Object.freeze(warning));
+      if (reference.kind === "material") {
+        for (const texture of asset.scene.assets.materialTextures(asset))
+          visit(texture);
+      }
+    };
+    for (const asset of assets.values()) visit(asset);
+    this.warnings = Object.freeze(warnings);
+  }
+  assets;
+  releases;
+  released = false;
+  warnings;
+  get(reference) {
+    return this.released ? void 0 : this.assets.get(sceneAssetReferenceKey(reference));
+  }
+  release() {
+    if (this.released) return;
+    this.released = true;
+    this.assets.clear();
+    for (const release of this.releases.splice(0)) release();
+  }
+};
+
+// ../sdk-oct2/src/model/scene/assets/SceneAssetDefinition.ts
+var sceneMaterialTextureSlots = [
+  "colorTextureId",
+  "metallicRoughnessTextureId",
+  "normalsTextureId",
+  "occlusionTextureId",
+  "emissiveTextureId"
+];
+
+// ../sdk-oct2/src/model/scene/assets/assetFingerprint.ts
+async function assetFingerprint(asset) {
+  let definition;
+  if (asset instanceof SceneGeometry) {
+    definition = Object.fromEntries(
+      [
+        "primitive",
+        "aabb",
+        "positionsCompressed",
+        "normalsCompressed",
+        "uvsCompressed",
+        "texCoordsCompressed",
+        "uvsDecompressMatrix",
+        "colorsCompressed",
+        "indices",
+        "edgeIndices",
+        "framesCompressed",
+        "vertexStatesCompressed",
+        "morphTargets",
+        "scales",
+        "rotations"
+      ].map((key) => [key, asset[key]])
+    );
+  } else if (asset instanceof SceneMaterial) {
+    const params = unwrapSDKResult(asset.toParams());
+    for (const slot of sceneMaterialTextureSlots) {
+      const texture = asset[slot.slice(0, -2)];
+      if (texture) params[slot] = texture.uniqueId;
+    }
+    definition = { ...params, id: void 0 };
+  } else {
+    definition = Object.fromEntries(
+      [
+        "buffers",
+        "compressed",
+        "mediaType",
+        "minFilter",
+        "magFilter",
+        "wrapS",
+        "wrapT",
+        "wrapR",
+        "flipY",
+        "encoding",
+        "preloadColor",
+        "uvTransform",
+        "mipmap"
+      ].map((key) => [key, asset[key]])
+    );
+    if (asset.imageData)
+      Object.assign(definition, {
+        pixels: asset.imageData.data,
+        width: asset.imageData.width,
+        height: asset.imageData.height
+      });
+    else if (!asset.buffers?.length) Object.assign(definition, { width: asset.width, height: asset.height });
+  }
+  return fingerprintValue(definition);
+}
+async function fingerprintValue(value) {
+  if (value === void 0) return "undefined";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+    const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    const hashes = [];
+    for (let offset = 0; offset < bytes.byteLength; offset += 1024 * 1024) {
+      hashes.push(await sha256(bytes.subarray(offset, Math.min(offset + 1024 * 1024, bytes.byteLength))));
+    }
+    return sha256(new TextEncoder().encode(JSON.stringify([value.constructor.name, bytes.byteLength, hashes])));
+  }
+  if (Array.isArray(value) && value.every((entry) => typeof entry === "number")) {
+    const hashes = [];
+    for (let offset = 0; offset < value.length; offset += 65536) {
+      hashes.push(await sha256(new Uint8Array(new Float64Array(value.slice(offset, offset + 65536)).buffer)));
+    }
+    return sha256(new TextEncoder().encode(JSON.stringify(["numbers", value.length, hashes])));
+  }
+  const entries = [];
+  for (const key of Object.keys(value).sort())
+    entries.push([key, await fingerprintValue(value[key])]);
+  return sha256(new TextEncoder().encode(JSON.stringify(entries)));
+}
+async function sha256(bytes) {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function stagedBytes(value, buffers = /* @__PURE__ */ new Set(), seen = /* @__PURE__ */ new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return typeof value === "string" ? value.length * 2 : 8;
+  seen.add(value);
+  const buffer = ArrayBuffer.isView(value) ? value.buffer : value instanceof ArrayBuffer ? value : void 0;
+  if (buffer) {
+    if (buffers.has(buffer)) return 0;
+    buffers.add(buffer);
+    return buffer.byteLength;
+  }
+  return Object.values(value).reduce((sum, entry) => sum + stagedBytes(entry, buffers, seen), 0);
+}
+
+// ../sdk-oct2/src/model/scene/assets/SceneAssetResolver.ts
+var coordinators = /* @__PURE__ */ new WeakMap();
+var DEFAULTS = { maxReferences: 1e4, batchSize: 32, concurrency: 4, maxStagedBytes: 256 * 1024 * 1024 };
+var SceneAssetResolver = class _SceneAssetResolver {
+  constructor(scene) {
+    this.scene = scene;
+  }
+  scene;
+  requests = /* @__PURE__ */ new Map();
+  pending = /* @__PURE__ */ new Set();
+  activeBatches = 0;
+  stagedSize = 0;
+  scheduled = false;
+  /**
+   * Current in-flight work only; completed requests and payloads are not cached.
+   */
+  get statistics() {
+    return {
+      requests: this.requests.size,
+      pending: this.pending.size,
+      activeBatches: this.activeBatches,
+      stagedBytes: this.stagedSize
+    };
+  }
+  static forScene(scene) {
+    let coordinator = coordinators.get(scene);
+    if (!coordinator) coordinators.set(scene, coordinator = new _SceneAssetResolver(scene));
+    return coordinator;
+  }
+  async resolve(references, resolver, options = {}) {
+    const releases = [];
+    const assets = /* @__PURE__ */ new Map();
+    try {
+      const limits = { ...DEFAULTS, ...options };
+      for (const key of Object.keys(DEFAULTS)) {
+        if (!Number.isSafeInteger(limits[key]) || limits[key] < 1)
+          throw new Error(`Invalid asset resolver limit '${key}'`);
+      }
+      if (limits.concurrency > 16 || limits.batchSize > 1024)
+        throw new Error("Asset resolver concurrency or batch size exceeds its safety bound");
+      if (references.length > limits.maxReferences) throw new Error("External asset declaration limit exceeded");
+      const budget = { keys: /* @__PURE__ */ new Set(), limit: limits.maxReferences };
+      const unique = new Map(references.map((reference) => [sceneAssetReferenceKey(reference), reference]));
+      const missingResolver = async () => {
+        throw new Error("External assets require an application resolver");
+      };
+      const results = await Promise.allSettled(
+        [...unique].map(async ([key, reference]) => {
+          const acquired = await this.acquire(reference, resolver ?? missingResolver, limits, options.signal, budget);
+          releases.push(acquired.release);
+          assets.set(key, acquired.asset);
+        })
+      );
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
+      const lease = new SceneAssetLease(assets, releases);
+      for (const warning of lease.warnings) options.onWarning?.(warning);
+      return { ok: true, value: lease };
+    } catch (cause) {
+      for (const release of releases) release();
+      return {
+        ok: false,
+        type: options.signal?.aborted ? 9 /* Cancelled */ : 2 /* InvalidInput */,
+        error: `[SceneAssetResolver.resolve] ${cause instanceof Error ? cause.message : String(cause)}`,
+        cause
+      };
+    }
+  }
+  async acquire(reference, resolver, options, signal, budget) {
+    signal?.throwIfAborted();
+    if (this.scene.destroyed || this.scene._clearing) throw new Error("Scene is unavailable");
+    const key = sceneAssetReferenceKey(reference);
+    if (budget) reserve(budget, key);
+    const resident = this.scene.assets.findExternal(reference);
+    if (resident) return { asset: resident, release: this.scene.assets.retain(resident) };
+    let request = this.requests.get(key);
+    if (!request || request.controller.signal.aborted) {
+      let resolve2, reject;
+      const promise = new Promise((accept, fail2) => {
+        resolve2 = accept;
+        reject = fail2;
+      });
+      request = {
+        budgets: /* @__PURE__ */ new Set(),
+        dependencies: /* @__PURE__ */ new Set(),
+        key,
+        reference: Object.freeze({ ...reference }),
+        resolver,
+        options,
+        generation: this.scene.assets.generation,
+        controller: new AbortController(),
+        promise,
+        resolve: resolve2,
+        reject,
+        waiters: 0,
+        settled: false
+      };
+      this.requests.set(key, request);
+      this.pending.add(request);
+      this.schedule();
+    }
+    if (budget) {
+      for (const dependency of request.dependencies) reserve(budget, dependency);
+      request.budgets.add(budget);
+    }
+    const current = request;
+    current.waiters++;
+    return new Promise((resolve2, reject) => {
+      let done = false;
+      const finish = () => {
+        if (done) return false;
+        done = true;
+        signal?.removeEventListener("abort", abort);
+        current.waiters--;
+        if (!current.waiters) {
+          current.controller.abort();
+          if (current.settled) this.retire(current);
+        }
+        return true;
+      };
+      const abort = () => {
+        if (finish()) reject(new DOMException("Asset load cancelled", "AbortError"));
+      };
+      signal?.addEventListener("abort", abort, { once: true });
+      current.promise.then(
+        (asset) => {
+          if (done) return;
+          const release = this.scene.assets.retain(asset);
+          if (finish()) resolve2({ asset, release });
+          else release();
+        },
+        (error) => {
+          if (finish()) reject(error);
+        }
+      );
+    });
+  }
+  schedule() {
+    if (this.scheduled) return;
+    this.scheduled = true;
+    queueMicrotask(() => {
+      this.scheduled = false;
+      this.drain();
+    });
+  }
+  drain() {
+    const first = this.pending.values().next().value;
+    if (!first || this.activeBatches >= first.options.concurrency) return;
+    const batch = [];
+    for (const request of this.pending) {
+      if (request.resolver !== first.resolver) continue;
+      this.pending.delete(request);
+      batch.push(request);
+      if (batch.length >= first.options.batchSize) break;
+    }
+    this.activeBatches++;
+    void this.prepare(batch);
+    this.drain();
+  }
+  async prepare(batch) {
+    const controller = new AbortController();
+    const definitions = /* @__PURE__ */ new Map();
+    let bytes = 0;
+    const retainedBuffers = /* @__PURE__ */ new Set();
+    let accepting = true;
+    const abortIfUnused = () => {
+      if (batch.every((request) => request.controller.signal.aborted)) controller.abort();
+    };
+    for (const request of batch) request.controller.signal.addEventListener("abort", abortIfUnused);
+    abortIfUnused();
+    let failure;
+    try {
+      controller.signal.throwIfAborted();
+      const requested = new Set(batch.map((request) => request.key));
+      const maxBytes = Math.min(...batch.map((request) => request.options.maxStagedBytes));
+      await batch[0].resolver(
+        batch.map((request) => request.reference),
+        {
+          signal: controller.signal,
+          maxBytes: Math.max(0, maxBytes - this.stagedSize),
+          write: (definition) => {
+            if (!accepting) throw new Error("The asset staging writer is closed");
+            controller.signal.throwIfAborted();
+            const key = sceneAssetReferenceKey(definition.reference);
+            if (!requested.has(key) || definitions.has(key) || definition.kind !== definition.reference.kind) {
+              throw new Error("Resolver returned a duplicate, unexpected or mismatched asset identity");
+            }
+            const size = stagedBytes(definition, retainedBuffers);
+            if (this.stagedSize + size > maxBytes) throw new Error("External asset staging byte limit exceeded");
+            this.stagedSize += size;
+            bytes += size;
+            definitions.set(key, definition);
+          }
+        }
+      );
+      if (definitions.size !== batch.length) throw new Error("Resolver did not supply every requested asset");
+    } catch (error) {
+      failure = error;
+    } finally {
+      accepting = false;
+      for (const request of batch) request.controller.signal.removeEventListener("abort", abortIfUnused);
+      this.activeBatches--;
+      this.schedule();
+    }
+    await Promise.all(
+      batch.map(async (request) => {
+        try {
+          if (failure) throw failure;
+          const definition = definitions.get(request.key);
+          const asset = await this.publish(request, definition);
+          request.resolve(asset);
+        } catch (error) {
+          request.reject(
+            Object.assign(
+              new Error(
+                `${request.reference.kind} '${request.reference.id}' at revision '${request.reference.revision}': ${error instanceof Error ? error.message : String(error)}`
+              ),
+              { cause: error }
+            )
+          );
+        } finally {
+          request.settled = true;
+          if (!request.waiters) this.retire(request);
+        }
+      })
+    );
+    definitions.clear();
+    this.stagedSize -= bytes;
+  }
+  async publish(request, definition) {
+    const signal = request.controller.signal;
+    signal.throwIfAborted();
+    if (definition.reference.sha256) {
+      if (!definition.sourceBytes || await sha256(definition.sourceBytes) !== definition.reference.sha256) {
+        throw new Error("External source SHA-256 verification failed");
+      }
+    }
+    const dependencies = [];
+    try {
+      if (definition.kind === "material") {
+        const entries = Object.entries(definition.textures ?? {});
+        if (entries.length + 1 > request.options.maxReferences) throw new Error("External dependency count exceeded");
+        for (const [slot, reference] of entries) {
+          if (!sceneMaterialTextureSlots.includes(slot) || reference.kind !== "texture") {
+            throw new Error("Material dependency must name a supported texture slot and texture identity");
+          }
+          const key = sceneAssetReferenceKey(reference);
+          request.dependencies.add(key);
+          for (const budget of request.budgets) reserve(budget, key);
+          dependencies.push({ slot, ...await this.acquire(reference, request.resolver, request.options, signal) });
+        }
+        for (const slot of sceneMaterialTextureSlots) {
+          if (slot in definition.params)
+            throw new Error("External materials use declared texture dependencies, not local texture IDs");
+        }
+      }
+      signal.throwIfAborted();
+      if (this.scene.destroyed || this.scene._clearing || request.generation !== this.scene.assets.generation) {
+        throw new Error("Scene changed while resolving an external asset");
+      }
+      let asset = this.scene.assets.findExternal(request.reference);
+      if (!asset) {
+        const id = `library:${globalThis.crypto.randomUUID()}`;
+        const factory = new SceneAssetFactory(this.scene, null, request.reference);
+        if (definition.kind === "material") {
+          asset = unwrapSDKResult(
+            factory.createMaterial({
+              ...definition.params,
+              id,
+              ...Object.fromEntries(dependencies.map((dependency) => [dependency.slot, dependency.asset.uniqueId]))
+            })
+          );
+        } else if (definition.kind === "texture") {
+          if ("src" in definition.params || "image" in definition.params)
+            throw new Error("External textures require complete bytes or pixels, not deferred image URLs");
+          asset = unwrapSDKResult(factory.createTexture({ ...definition.params, id }));
+        } else {
+          const params = { ...definition.params, id, updateMode: "static" };
+          asset = "positionsCompressed" in params || "framesCompressed" in params ? unwrapSDKResult(factory.geometry.createGeometryCompressed(params)) : unwrapSDKResult(factory.geometry.createGeometry(params));
+        }
+        request.release = this.scene.assets.retain(asset);
+        this.scene.assets.releaseApplicationOwnership(asset);
+        this.scene.assets.fingerprint(asset, await assetFingerprint(asset));
+      } else request.release = this.scene.assets.retain(asset);
+      signal.throwIfAborted();
+      if (request.generation !== this.scene.assets.generation || asset.destroyed)
+        throw new Error("Resolved asset was retired before publication");
+      return asset;
+    } finally {
+      for (const dependency of dependencies) dependency.release();
+    }
+  }
+  retire(request) {
+    request.release?.();
+    request.release = void 0;
+    if (this.requests.get(request.key) === request) this.requests.delete(request.key);
+  }
+};
+function reserve(budget, key) {
+  if (budget.keys.has(key)) return;
+  if (budget.keys.size >= budget.limit) throw new Error("External dependency count exceeded");
+  budget.keys.add(key);
+}
+
+// ../sdk-oct2/src/model/scene/internal/readOnlyExportView.ts
+function readOnlyExportView(component, overrides) {
+  return new Proxy(component, {
+    get(target, key) {
+      if (typeof key === "string" && Object.prototype.hasOwnProperty.call(overrides, key)) return overrides[key];
+      const value = Reflect.get(target, key, target);
+      if (typeof value === "function")
+        return () => {
+          throw new Error("Export views cannot mutate scene components");
+        };
+      return value;
+    },
+    set() {
+      throw new Error("Export views are read-only");
+    },
+    defineProperty() {
+      throw new Error("Export views are read-only");
+    },
+    deleteProperty() {
+      throw new Error("Export views are read-only");
+    }
+  });
 }
 
 // ../sdk-oct2/src/formats/gltf/internal/fetchResource.ts
@@ -94879,10 +96504,10 @@ async function decode7(gltfData, options) {
 }
 function transformTexCoords(materialIndex, gltfData, gltfScenegraph) {
   const material = gltfData.json.materials?.[materialIndex];
-  const materialTextures = findTextureInfos(material);
+  const materialTextures2 = findTextureInfos(material);
   const processedTransforms = /* @__PURE__ */ new Map();
   let nextTexCoord = getNextTexCoord(gltfData);
-  for (const textureInfo of materialTextures) {
+  for (const textureInfo of materialTextures2) {
     const extension = textureInfo.extensions?.[KHR_TEXTURE_TRANSFORM];
     if (extension) {
       const sourceTexCoord = extension.texCoord ?? textureInfo.texCoord ?? 0;
@@ -97304,10 +98929,13 @@ async function parseWithLoader(loader, data, options, context) {
 }
 
 // ../sdk-oct2/src/formats/gltf/GLTFLoader.ts
-var materialBindingGLTFLoader = { ...GLTFLoader, options: {
-  ...GLTFLoader.options,
-  gltf: { ...GLTFLoader.options?.gltf, excludeExtensions: { KHR_texture_transform: false, KHR_lights_punctual: false } }
-} };
+var materialBindingGLTFLoader = {
+  ...GLTFLoader,
+  options: {
+    ...GLTFLoader.options,
+    gltf: { ...GLTFLoader.options?.gltf, excludeExtensions: { KHR_texture_transform: false, KHR_lights_punctual: false } }
+  }
+};
 var GLTFLoader2 = class extends ModelLoader {
   constructor() {
     super({
@@ -97352,11 +98980,17 @@ async function parseGLTF2(params, options) {
     return;
   }
   assertValidGLBHeader(fileData);
-  const parseOptions = { fetch: (uri, init) => fetchResource(uri, { ...init, signal: options?.signal ?? init?.signal }) };
   const node = typeof process !== "undefined" && !!process.versions?.node;
   const baseUri = options?.baseUri || (node ? "./" : void 0);
+  const directory = baseUri && (baseUri.endsWith("/") ? baseUri : `${baseUri}/`);
+  const parseOptions = {
+    fetch: (uri, init) => {
+      const resource = directory && uri.startsWith(`${directory}blob:`) ? uri.slice(directory.length) : uri;
+      return fetchResource(resource, { ...init, signal: options?.signal ?? init?.signal });
+    }
+  };
   if (baseUri) {
-    parseOptions.core = { baseUrl: baseUri.endsWith("/") ? baseUri : `${baseUri}/` };
+    parseOptions.core = { baseUrl: directory };
   }
   if (options && options.dracoModule) {
     parseOptions.modules = { draco3d: options.dracoModule };
@@ -97385,7 +99019,10 @@ async function parseGLTF2(params, options) {
       await retainExternalImageBytes(processedGLTF, baseUri || "./", options?.signal);
     }
   } catch (errMsg) {
-    throw new SDKOperationError({ ...sdkFailure(errMsg, 2 /* InvalidInput */), error: `[GLTFLoader.load] Error parsing glTF -> ${errMsg}` });
+    throw new SDKOperationError({
+      ...sdkFailure(errMsg, 2 /* InvalidInput */),
+      error: `[GLTFLoader.load] Error parsing glTF -> ${errMsg}`
+    });
   }
   await yieldToHost(signal);
   const ctx = {
@@ -97406,20 +99043,32 @@ async function parseGLTF2(params, options) {
   try {
     emit("Decoding textures", 0, 0);
     if (!parseTextures(ctx)) {
-      throw new SDKOperationError({ type: 2 /* InvalidInput */, error: ctx.errors.length > 0 ? ctx.errors[0] : `[GLTFLoader.load] Error parsing glTF` });
+      throw new SDKOperationError({
+        type: 2 /* InvalidInput */,
+        error: ctx.errors.length > 0 ? ctx.errors[0] : `[GLTFLoader.load] Error parsing glTF`
+      });
     }
     await yieldToHost(signal);
     emit("Building materials", 0, 0);
     if (!parseMaterials(ctx)) {
-      throw new SDKOperationError({ type: 2 /* InvalidInput */, error: ctx.errors.length > 0 ? ctx.errors[0] : `[GLTFLoader.load] Error parsing glTF` });
+      throw new SDKOperationError({
+        type: 2 /* InvalidInput */,
+        error: ctx.errors.length > 0 ? ctx.errors[0] : `[GLTFLoader.load] Error parsing glTF`
+      });
     }
     await yieldToHost(signal);
     emit("Building scene", 0, 0);
     if (!parseDefaultScene(ctx)) {
-      throw new SDKOperationError({ type: 2 /* InvalidInput */, error: ctx.errors.length > 0 ? ctx.errors[0] : `[GLTFLoader.load] Error parsing glTF` });
+      throw new SDKOperationError({
+        type: 2 /* InvalidInput */,
+        error: ctx.errors.length > 0 ? ctx.errors[0] : `[GLTFLoader.load] Error parsing glTF`
+      });
     }
     if (!parseAnimations(ctx)) {
-      throw new SDKOperationError({ type: 2 /* InvalidInput */, error: ctx.errors.length > 0 ? ctx.errors[0] : `[GLTFLoader.load] Error parsing glTF animations` });
+      throw new SDKOperationError({
+        type: 2 /* InvalidInput */,
+        error: ctx.errors.length > 0 ? ctx.errors[0] : `[GLTFLoader.load] Error parsing glTF animations`
+      });
     }
     emit("Building scene", 1, 1);
     parseStructuralMetadata(ctx);
@@ -97460,7 +99109,11 @@ function parseStructuralMetadata(ctx) {
   if (!dataModel || !sm?.propertyTables) {
     return;
   }
-  const metadata = { propertySets: [], objects: [], relationships: [] };
+  const metadata = {
+    propertySets: [],
+    objects: [],
+    relationships: []
+  };
   const parentId = ctx.options.dataParentId;
   for (let t = 0; t < sm.propertyTables.length; t++) {
     const table = sm.propertyTables[t];
@@ -97480,7 +99133,12 @@ function parseStructuralMetadata(ctx) {
           value: featureMetadataValue(table.properties[name14]?.data, i, schemaClass?.properties?.[name14]?.type)
         }))
       });
-      metadata.objects.push({ id: objectId, type: className, name: `${className} ${i}`, propertySetIds: [propertySetId] });
+      metadata.objects.push({
+        id: objectId,
+        type: className,
+        name: `${className} ${i}`,
+        propertySetIds: [propertySetId]
+      });
       if (parentId) {
         metadata.relationships.push({ type: "BasicAggregation", relatingObjectId: parentId, relatedObjectId: objectId });
       }
@@ -97600,22 +99258,25 @@ function parseTexture(ctx, texture) {
     return false;
   }
   const dims = decodedImage ? { width: decodedImage.width, height: decodedImage.height } : imageSizeFromBytes(new Uint8Array(encodedBytes), texture.source.mimeType);
-  const result = trackComponent(ctx, ctx.sceneModel.createTexture({
-    id: textureId,
-    image: decodedImage || void 0,
-    buffers: encodedBytes ? [encodedBytes] : void 0,
-    mediaType: encodedBytes ? mimeTypeToMediaType(texture.source.mimeType) : void 0,
-    width: dims.width,
-    height: dims.height,
-    minFilter,
-    magFilter,
-    wrapS,
-    wrapT,
-    wrapR,
-    flipY: !!texture.flipY,
-    encoding: isColorSpaceTexture(ctx, texture) ? sRGBEncoding : void 0,
-    mipmap
-  }));
+  const result = trackComponent(
+    ctx,
+    ctx.sceneModel.createTexture({
+      id: textureId,
+      image: decodedImage || void 0,
+      buffers: encodedBytes ? [encodedBytes] : void 0,
+      mediaType: encodedBytes ? mimeTypeToMediaType(texture.source.mimeType) : void 0,
+      width: dims.width,
+      height: dims.height,
+      minFilter,
+      magFilter,
+      wrapS,
+      wrapT,
+      wrapR,
+      flipY: !!texture.flipY,
+      encoding: isColorSpaceTexture(ctx, texture) ? sRGBEncoding : void 0,
+      mipmap
+    })
+  );
   if (result.ok === false) {
     throw new SDKOperationError({ ...result, error: `[GLTFLoader.load] Failed to create texture -> ${result.error}` });
     return false;
@@ -97703,7 +99364,10 @@ function parseMaterials(ctx) {
       const materialCfg = parseMaterial(ctx, material);
       const materialResult = trackComponent(ctx, ctx.sceneModel.createMaterial(materialCfg));
       if (materialResult.ok === false) {
-        throw new SDKOperationError({ ...materialResult, error: `Failed to create SceneMaterial set -> ${materialResult.error}` });
+        throw new SDKOperationError({
+          ...materialResult,
+          error: `Failed to create SceneMaterial set -> ${materialResult.error}`
+        });
         return false;
       }
       material._materialId = materialResult.value.id;
@@ -97876,14 +99540,7 @@ function textureTransformToAffine(transform2) {
   const sy = Number.isFinite(scale3[1]) ? scale3[1] : 1;
   const ox = Number.isFinite(offset[0]) ? offset[0] : 0;
   const oy = Number.isFinite(offset[1]) ? offset[1] : 0;
-  return [
-    cos * sx,
-    sin * sx,
-    -sin * sy,
-    cos * sy,
-    ox,
-    oy
-  ];
+  return [cos * sx, sin * sx, -sin * sy, cos * sy, ox, oy];
 }
 function extractTexCoordChannels(attributes) {
   const texCoords = {};
@@ -97971,20 +99628,23 @@ function createNodeTransforms(ctx, node, parentTransformId, rootMatrix) {
     ctx.errors.push("[GLTFLoader.load] Animated glTF node not found in node table");
     return false;
   }
-  const transformId = uniqueResourceId(
-    sanitizeGLTFId(node.name) || `gltfNode-${nodeIndex}`,
-    ctx.usedTransformIds
-  );
+  const transformId = uniqueResourceId(sanitizeGLTFId(node.name) || `gltfNode-${nodeIndex}`, ctx.usedTransformIds);
   ctx.nodeTransformIds.set(nodeIndex, transformId);
   const localMatrix = parseNodeMatrix(node, null) || identityMat4(createMat4Float64());
   const matrix = rootMatrix && !parentTransformId ? mulMat4(rootMatrix, localMatrix, createMat4Float64()) : localMatrix;
-  const result = trackComponent(ctx, ctx.sceneModel.createTransform({
-    id: transformId,
-    matrix: createMat4Float64(matrix),
-    parentTransformId
-  }));
+  const result = trackComponent(
+    ctx,
+    ctx.sceneModel.createTransform({
+      id: transformId,
+      matrix: createMat4Float64(matrix),
+      parentTransformId
+    })
+  );
   if (result.ok === false) {
-    throw new SDKOperationError({ ...result, error: `[GLTFLoader.load] Failed to create SceneTransform -> ${result.error}` });
+    throw new SDKOperationError({
+      ...result,
+      error: `[GLTFLoader.load] Failed to create SceneTransform -> ${result.error}`
+    });
     return false;
   }
   const lightIndex = node.extensions?.KHR_lights_punctual?.light;
@@ -97994,17 +99654,23 @@ function createNodeTransforms(ctx, node, parentTransformId, rootMatrix) {
       ctx.errors.push("[GLTFLoader.load] Invalid punctual light reference");
       return false;
     }
-    const id = uniqueResourceId(sanitizeGLTFId(definition.name) || `gltfLight-${nodeIndex}`, new Set(Object.keys(ctx.sceneModel.lights)));
-    const light = trackComponent(ctx, ctx.sceneModel.createLight({
-      id,
-      type: definition.type,
-      color: definition.color,
-      intensity: definition.intensity,
-      range: definition.range,
-      parentTransformId: transformId,
-      innerConeAngle: definition.spot?.innerConeAngle,
-      outerConeAngle: definition.spot?.outerConeAngle
-    }));
+    const id = uniqueResourceId(
+      sanitizeGLTFId(definition.name) || `gltfLight-${nodeIndex}`,
+      new Set(Object.keys(ctx.sceneModel.lights))
+    );
+    const light = trackComponent(
+      ctx,
+      ctx.sceneModel.createLight({
+        id,
+        type: definition.type,
+        color: definition.color,
+        intensity: definition.intensity,
+        range: definition.range,
+        parentTransformId: transformId,
+        innerConeAngle: definition.spot?.innerConeAngle,
+        outerConeAngle: definition.spot?.outerConeAngle
+      })
+    );
     if (light.ok === false) {
       throw new SDKOperationError({ ...light, error: `[GLTFLoader.load] ${light.error}` });
       return false;
@@ -98041,13 +99707,19 @@ function parseNodeWithTransforms(ctx, node) {
         sanitizeGLTFId(node.name) || `entity-${ctx.baseId}-${ctx.nextId++}`,
         ctx.usedObjectIds
       );
-      const result = trackComponent(ctx, ctx.sceneModel.createObject({
-        id: objectId,
-        meshIds,
-        layerId: ctx.options.layerId
-      }));
+      const result = trackComponent(
+        ctx,
+        ctx.sceneModel.createObject({
+          id: objectId,
+          meshIds,
+          layerId: ctx.options.layerId
+        })
+      );
       if (result.ok === false) {
-        throw new SDKOperationError({ ...result, error: `[GLTFLoader.load] Failed to create SceneObject -> ${result.error}` });
+        throw new SDKOperationError({
+          ...result,
+          error: `[GLTFLoader.load] Failed to create SceneObject -> ${result.error}`
+        });
         return false;
       }
     }
@@ -98127,13 +99799,19 @@ function parseNodesWithoutNames(ctx, node, depth, matrix) {
   if (depth === 0) {
     const objectId = `entity-${ctx.baseId}-${ctx.nextId++}`;
     if (meshIds && meshIds.length > 0) {
-      const result = trackComponent(ctx, ctx.sceneModel.createObject({
-        id: objectId,
-        meshIds,
-        layerId: ctx.options.layerId
-      }));
+      const result = trackComponent(
+        ctx,
+        ctx.sceneModel.createObject({
+          id: objectId,
+          meshIds,
+          layerId: ctx.options.layerId
+        })
+      );
       if (result.ok === false) {
-        throw new SDKOperationError({ ...result, error: `[GLTFLoader.load] Failed to create SceneObject -> ${result.error}` });
+        throw new SDKOperationError({
+          ...result,
+          error: `[GLTFLoader.load] Failed to create SceneObject -> ${result.error}`
+        });
         return false;
       }
       meshIds.length = 0;
@@ -98183,12 +99861,18 @@ function parseNodesWithNames(ctx, node, depth, matrix) {
     }
     const entityMeshIds = meshIdsStack.pop();
     if (ctx.meshIds && ctx.meshIds.length > 0) {
-      const result = trackComponent(ctx, ctx.sceneModel.createObject({
-        id: objectId,
-        meshIds: entityMeshIds
-      }));
+      const result = trackComponent(
+        ctx,
+        ctx.sceneModel.createObject({
+          id: objectId,
+          meshIds: entityMeshIds
+        })
+      );
       if (result.ok === false) {
-        throw new SDKOperationError({ ...result, error: `[GLTFLoader.load] Failed to create SceneObject -> ${result.error}` });
+        throw new SDKOperationError({
+          ...result,
+          error: `[GLTFLoader.load] Failed to create SceneObject -> ${result.error}`
+        });
         return false;
       }
     }
@@ -98319,7 +100003,10 @@ function parseMesh(node, ctx, matrix, meshIds, parentTransformId) {
         }
         const result2 = trackComponent(ctx, ctx.sceneModel.createGeometry(geometryParams));
         if (result2.ok === false) {
-          throw new SDKOperationError({ ...result2, error: `[GLTFLoader.load] Failed to create SceneGeometry -> ${result2.error}` });
+          throw new SDKOperationError({
+            ...result2,
+            error: `[GLTFLoader.load] Failed to create SceneGeometry -> ${result2.error}`
+          });
           return false;
         }
       }
@@ -98346,7 +100033,10 @@ function parseMesh(node, ctx, matrix, meshIds, parentTransformId) {
       }
       const result = trackComponent(ctx, ctx.sceneModel.createMesh(meshParams));
       if (result.ok === false) {
-        throw new SDKOperationError({ ...result, error: `[GLTFLoader.load] Failed to create SceneMesh -> ${result.error}` });
+        throw new SDKOperationError({
+          ...result,
+          error: `[GLTFLoader.load] Failed to create SceneMesh -> ${result.error}`
+        });
         return false;
       }
       meshIds.push(meshId);
@@ -98463,13 +100153,19 @@ function parseAnimations(ctx) {
       });
     }
     if (channels.length > 0) {
-      const result = trackComponent(ctx, ctx.sceneModel.createAnimation({
-        id: animationId,
-        name: gltfAnimation.name,
-        channels
-      }));
+      const result = trackComponent(
+        ctx,
+        ctx.sceneModel.createAnimation({
+          id: animationId,
+          name: gltfAnimation.name,
+          channels
+        })
+      );
       if (result.ok === false) {
-        throw new SDKOperationError({ ...result, error: `[GLTFLoader.load] Failed to create SceneAnimation -> ${result.error}` });
+        throw new SDKOperationError({
+          ...result,
+          error: `[GLTFLoader.load] Failed to create SceneAnimation -> ${result.error}`
+        });
         return false;
       }
     }
@@ -98661,7 +100357,8 @@ function splitPrimitiveByFeature(ctx, primitive, matrix) {
     if (outNormals) geometryParams.normals = new Float32Array(outNormals);
     if (outUvs) geometryParams.uvs = new Float32Array(outUvs);
     const geometryResult = trackComponent(ctx, ctx.sceneModel.createGeometry(geometryParams));
-    if (geometryResult.ok === false) throw new SDKOperationError({ ...geometryResult, error: `[GLTFLoader.load] ${geometryResult.error}` });
+    if (geometryResult.ok === false)
+      throw new SDKOperationError({ ...geometryResult, error: `[GLTFLoader.load] ${geometryResult.error}` });
     const meshId = `${objectId}-mesh`;
     const meshParams = {
       id: meshId,
@@ -98674,11 +100371,51 @@ function splitPrimitiveByFeature(ctx, primitive, matrix) {
       meshParams.opacity = 1;
     }
     const meshResult = trackComponent(ctx, ctx.sceneModel.createMesh(meshParams));
-    if (meshResult.ok === false) throw new SDKOperationError({ ...meshResult, error: `[GLTFLoader.load] ${meshResult.error}` });
-    const objectResult = trackComponent(ctx, ctx.sceneModel.createObject({ id: objectId, meshIds: [meshId], layerId: ctx.options.layerId }));
-    if (objectResult.ok === false) throw new SDKOperationError({ ...objectResult, error: `[GLTFLoader.load] ${objectResult.error}` });
+    if (meshResult.ok === false)
+      throw new SDKOperationError({ ...meshResult, error: `[GLTFLoader.load] ${meshResult.error}` });
+    const objectResult = trackComponent(
+      ctx,
+      ctx.sceneModel.createObject({ id: objectId, meshIds: [meshId], layerId: ctx.options.layerId })
+    );
+    if (objectResult.ok === false)
+      throw new SDKOperationError({ ...objectResult, error: `[GLTFLoader.load] ${objectResult.error}` });
   }
   return true;
+}
+
+// ../sdk-oct2/src/model/scene/internal/exportResourceView.ts
+function exportResourceView(model) {
+  if (model.resourceSelection) return model;
+  const selection = new SceneResourceSelection(model);
+  const view = Object.create(model);
+  Object.assign(view, { resourceSelection: selection, sourceModel: model });
+  for (const kind of ["geometries", "materials", "textures"]) {
+    Object.defineProperty(view, kind, {
+      value: Object.fromEntries(selection[kind].map((asset) => [selection.id(asset), asset]))
+    });
+  }
+  Object.defineProperty(view, "animations", {
+    value: Object.fromEntries(
+      Object.entries(model.animations ?? {}).map(([id, animation]) => [
+        id,
+        readOnlyExportView(animation, {
+          channels: exportAnimationChannels(model, animation.channels, selection),
+          toParams: () => {
+            const result = animation.toParams();
+            if (!result.ok) return result;
+            return {
+              ok: true,
+              value: { ...result.value, channels: exportAnimationChannels(model, result.value.channels, selection) }
+            };
+          }
+        })
+      ])
+    )
+  });
+  return view;
+}
+function exportResources(model) {
+  return model.resourceSelection ?? new SceneResourceSelection(model);
 }
 
 // ../sdk-oct2/src/formats/gltf/internal/appendMaterialAnimations.ts
@@ -98789,7 +100526,8 @@ var ModelExporter = class {
    * This method does not reject for parser, encoder, or transport failures.
    */
   async write(params, options = {}) {
-    if (options.signal?.aborted) return { ok: false, type: 9 /* Cancelled */, error: "Operation cancelled", cause: options.signal.reason };
+    if (options.signal?.aborted)
+      return { ok: false, type: 9 /* Cancelled */, error: "Operation cancelled", cause: options.signal.reason };
     try {
       const value = await this._write(params, options);
       return { ok: true, value };
@@ -98805,26 +100543,64 @@ var ModelExporter = class {
       }
       const { sceneModel, dataModel } = params;
       if (!sceneModel && !dataModel) {
-        return reject(new SDKOperationError({ type: 2 /* InvalidInput */, error: "Argument expected: params.sceneModel or params.dataModel" }));
+        return reject(
+          new SDKOperationError({
+            type: 2 /* InvalidInput */,
+            error: "Argument expected: params.sceneModel or params.dataModel"
+          })
+        );
       }
       if (sceneModel && sceneModel.destroyed) {
-        return reject(new SDKOperationError({ type: 1 /* InvalidOperation */, error: "SceneModel already destroyed" }));
+        return reject(
+          new SDKOperationError({ type: 1 /* InvalidOperation */, error: "SceneModel already destroyed" })
+        );
       }
       if (dataModel) {
         if (!(dataModel instanceof DataModel)) {
-          return reject(new SDKOperationError({ type: 2 /* InvalidInput */, error: "Argument type mismatch: params.dataModel should be a DataModel" }));
+          return reject(
+            new SDKOperationError({
+              type: 2 /* InvalidInput */,
+              error: "Argument type mismatch: params.dataModel should be a DataModel"
+            })
+          );
         }
         if (dataModel.destroyed) {
-          return reject(new SDKOperationError({ type: 1 /* InvalidOperation */, error: "DataModel already destroyed" }));
+          return reject(
+            new SDKOperationError({ type: 1 /* InvalidOperation */, error: "DataModel already destroyed" })
+          );
         }
       }
       const version2 = params.version || this.defaultVersion;
       const encoder = this.encoders[version2];
       if (!encoder) {
-        return reject(new SDKOperationError({ type: 6 /* NotSupported */, error: `Unsupported target file schema version: ${version2} - supported versions are [${this.versions}]` }));
+        return reject(
+          new SDKOperationError({
+            type: 6 /* NotSupported */,
+            error: `Unsupported target file schema version: ${version2} - supported versions are [${this.versions}]`
+          })
+        );
       }
       const scope = createYieldScope(options.signal, options.yieldIntervalMs);
-      Promise.resolve().then(() => encoder({ sceneModel, dataModel }, { ...options, signal: scope.signal })).finally(() => scope.dispose()).then(resolve2, reject);
+      const releases = [];
+      const assets = sceneModel?.scene?.assets;
+      const generation = assets?.generation;
+      Promise.resolve().then(async () => {
+        if (sceneModel && assets) {
+          const selection = new SceneResourceSelection(sceneModel);
+          for (const asset of [...selection.geometries, ...selection.materials, ...selection.textures])
+            releases.push(assets.retain(asset));
+        }
+        const value = await encoder(
+          { sceneModel: sceneModel ? exportResourceView(sceneModel) : void 0, dataModel },
+          { ...options, signal: scope.signal }
+        );
+        if (sceneModel?.destroyed || assets && assets.generation !== generation)
+          throw new Error("Export source was unloaded before encoding finished");
+        return value;
+      }).finally(() => {
+        for (const release of releases) release();
+        scope.dispose();
+      }).then(resolve2, reject);
     });
   }
 };
@@ -108310,19 +110086,20 @@ var TEXTURE_REFS = [
   "occlusionTexture",
   "emissiveTexture"
 ];
-function materialTextureIds(material) {
+function materialTextureIds(material, selection) {
   const ids2 = [];
   for (const key of TEXTURE_REFS) {
-    if (material[key]) ids2.push(material[key].id);
+    if (material[key]) ids2.push(selection.id(material[key]));
   }
   return ids2;
 }
 function findTriplanarTextureSkip(sceneModel) {
+  const selection = exportResources(sceneModel);
   const usedOnUV = /* @__PURE__ */ new Set();
   const usedOnUVless = /* @__PURE__ */ new Set();
   for (const objectId of Object.keys(sceneModel.objects)) {
     for (const mesh of sceneModel.objects[objectId].meshes) {
-      const materialId = mesh.material?.id;
+      const materialId = mesh.material ? selection.id(mesh.material) : void 0;
       if (!materialId) continue;
       if (mesh.geometry?.uvsCompressed) usedOnUV.add(materialId);
       else usedOnUVless.add(materialId);
@@ -108333,7 +110110,7 @@ function findTriplanarTextureSkip(sceneModel) {
   const texRefTriplanar = /* @__PURE__ */ new Map();
   for (const materialId of Object.keys(sceneModel.materials)) {
     const material = sceneModel.materials[materialId];
-    const texIds = materialTextureIds(material);
+    const texIds = materialTextureIds(material, selection);
     for (const t of texIds) texRefTotal.set(t, (texRefTotal.get(t) ?? 0) + 1);
     const triplanarOnly = texIds.length > 0 && usedOnUVless.has(materialId) && !usedOnUV.has(materialId);
     if (triplanarOnly) {
@@ -108391,11 +110168,7 @@ async function encode22(params, options) {
     }
     await yieldToHost(signal);
   };
-  const coordinateSystemMatrix = options.coordinateSystem ? createCoordinateSystemTransform(
-    sceneModel.scene.coordinateSystem,
-    options.coordinateSystem,
-    createMat4Float64()
-  ) : null;
+  const coordinateSystemMatrix = options.coordinateSystem ? createCoordinateSystemTransform(sceneModel.scene.coordinateSystem, options.coordinateSystem, createMat4Float64()) : null;
   const io = new WebIO({ credentials: "include" });
   const doc = new Document();
   const gltfScene = doc.createScene();
@@ -108428,7 +110201,7 @@ async function encode22(params, options) {
     }
     if (!imageBytes) continue;
     const gltfTex = doc.createTexture(sceneTex.id).setImage(imageBytes).setMimeType(mime);
-    textureMap.set(sceneTex.id, gltfTex);
+    textureMap.set(sceneTex, gltfTex);
   }
   const materialMap = /* @__PURE__ */ new Map();
   const materialIds = Object.keys(sceneModel.materials);
@@ -108474,22 +110247,25 @@ async function encode22(params, options) {
   for (let mi = 0; mi < materialIds.length; mi++) {
     if ((mi & 63) === 0) await step("Encoding materials", mi, materialIds.length);
     const sceneMat = sceneModel.materials[materialIds[mi]];
-    materialMap.set(sceneMat.id, buildGltfMaterial(
-      doc,
+    materialMap.set(
       sceneMat,
-      textureMap,
-      triplanarSkip.materialIds.has(sceneMat.id),
-      clearcoatExtension,
-      sheenExtension,
-      iorExtension,
-      transmissionExtension,
-      volumeExtension,
-      textureTransformExtension
-    ));
+      buildGltfMaterial(
+        doc,
+        sceneMat,
+        textureMap,
+        triplanarSkip.materialIds.has(exportResources(sceneModel).id(sceneMat)),
+        clearcoatExtension,
+        sheenExtension,
+        iorExtension,
+        transmissionExtension,
+        volumeExtension,
+        textureTransformExtension
+      )
+    );
   }
   const accessorCache = /* @__PURE__ */ new Map();
   function getAccessors(geom) {
-    const cached = accessorCache.get(geom.id);
+    const cached = accessorCache.get(geom);
     if (cached) return cached;
     if (!geom.positionsCompressed || !geom.aabb) return null;
     const positions = new Float32Array(geom.positionsCompressed.length);
@@ -108520,7 +110296,10 @@ async function encode22(params, options) {
             continue;
           }
           const uvs = channel === 0 && geom.uvsDecompressMatrix ? decompressUVs(compressed, geom.uvsDecompressMatrix, new Float32Array(compressed.length)) : new Float32Array(compressed);
-          bundle.uvs.set(channel, doc.createAccessor().setType("VEC2").setArray(uvs).setBuffer(buffer));
+          bundle.uvs.set(
+            channel,
+            doc.createAccessor().setType("VEC2").setArray(uvs).setBuffer(buffer)
+          );
         }
       }
     }
@@ -108543,21 +110322,27 @@ async function encode22(params, options) {
       for (const target of geom.morphTargets) {
         const primitiveTarget = doc.createPrimitiveTarget(target.name ?? target.id ?? "");
         if (target.positions) {
-          primitiveTarget.setAttribute("POSITION", doc.createAccessor().setType("VEC3").setArray(new Float32Array(target.positions)).setBuffer(buffer));
+          primitiveTarget.setAttribute(
+            "POSITION",
+            doc.createAccessor().setType("VEC3").setArray(new Float32Array(target.positions)).setBuffer(buffer)
+          );
         }
         if (!ignoreNormals && target.normals) {
-          primitiveTarget.setAttribute("NORMAL", doc.createAccessor().setType("VEC3").setArray(new Float32Array(target.normals)).setBuffer(buffer));
+          primitiveTarget.setAttribute(
+            "NORMAL",
+            doc.createAccessor().setType("VEC3").setArray(new Float32Array(target.normals)).setBuffer(buffer)
+          );
         }
         bundle.morphTargets.push(primitiveTarget);
       }
     }
-    accessorCache.set(geom.id, bundle);
+    accessorCache.set(geom, bundle);
     return bundle;
   }
   const primitiveCache = /* @__PURE__ */ new Map();
   function getPrimitive(geom, sceneMesh) {
-    const matKey = sceneMesh.material ? `mat:${sceneMesh.material.id}` : `mesh:${sceneMesh.id}`;
-    const cacheKey = `${geom.id}__${matKey}`;
+    const matKey = sceneMesh.material ? `mat:${sceneMesh.material.uniqueId}` : `mesh:${sceneMesh.uniqueId}`;
+    const cacheKey = JSON.stringify([geom.uniqueId, matKey]);
     const cached = primitiveCache.get(cacheKey);
     if (cached) return cached;
     const accessors = getAccessors(geom);
@@ -108577,7 +110362,7 @@ async function encode22(params, options) {
       }
     }
     if (sceneMesh.material) {
-      const mat = materialMap.get(sceneMesh.material.id);
+      const mat = materialMap.get(sceneMesh.material);
       if (mat) prim.setMaterial(mat);
     } else {
       const c2 = sceneMesh.color || [1, 1, 1];
@@ -108657,7 +110442,7 @@ async function encode22(params, options) {
       const target = channel.target;
       if (target.type === "vertexState") continue;
       if (target.type === "material") {
-        const material = materialMap.get(target.materialId);
+        const material = materialMap.get(sceneModel.materials[target.materialId]);
         if (!material) throw new Error(`[GLTFExporter] Missing material animation target '${target.materialId}'`);
         materialTracks.push({
           animationIndex: doc.getRoot().listAnimations().indexOf(clip),
@@ -108678,7 +110463,11 @@ async function encode22(params, options) {
           for (let j = 0; j < 4; j++) values2[i + j] = rotation[j];
         }
       }
-      const sampler = doc.createAnimationSampler().setInput(doc.createAccessor().setType("SCALAR").setArray(new Float32Array(channel.sampler.times)).setBuffer(buffer)).setOutput(doc.createAccessor().setType(path4 === "weights" ? "SCALAR" : path4 === "rotation" ? "VEC4" : "VEC3").setArray(new Float32Array(values2)).setBuffer(buffer)).setInterpolation(channel.sampler.interpolation ?? "LINEAR");
+      const sampler = doc.createAnimationSampler().setInput(
+        doc.createAccessor().setType("SCALAR").setArray(new Float32Array(channel.sampler.times)).setBuffer(buffer)
+      ).setOutput(
+        doc.createAccessor().setType(path4 === "weights" ? "SCALAR" : path4 === "rotation" ? "VEC4" : "VEC3").setArray(new Float32Array(values2)).setBuffer(buffer)
+      ).setInterpolation(channel.sampler.interpolation ?? "LINEAR");
       clip.addSampler(sampler).addChannel(doc.createAnimationChannel().setTargetNode(node).setTargetPath(path4).setSampler(sampler));
     }
   }
@@ -108729,11 +110518,51 @@ function buildGltfMaterial(doc, sceneMat, textureMap, skipTextures, clearcoatExt
     mat.setAlphaCutoff(sceneMat.alphaCutoff ?? 0.5);
   }
   if (!skipTextures) {
-    bindTexture(mat, "BaseColor", sceneMat.colorTexture, textureMap, sceneMat.colorTextureTexCoord, sceneMat.colorTextureUVTransform, textureTransformExtension);
-    bindTexture(mat, "MetallicRoughness", sceneMat.metallicRoughnessTexture, textureMap, sceneMat.metallicRoughnessTextureTexCoord, sceneMat.metallicRoughnessTextureUVTransform, textureTransformExtension);
-    bindTexture(mat, "Normal", sceneMat.normalsTexture, textureMap, sceneMat.normalsTextureTexCoord, sceneMat.normalsTextureUVTransform, textureTransformExtension);
-    bindTexture(mat, "Occlusion", sceneMat.occlusionTexture, textureMap, sceneMat.occlusionTextureTexCoord, sceneMat.occlusionTextureUVTransform, textureTransformExtension);
-    bindTexture(mat, "Emissive", sceneMat.emissiveTexture, textureMap, sceneMat.emissiveTextureTexCoord, sceneMat.emissiveTextureUVTransform, textureTransformExtension);
+    bindTexture(
+      mat,
+      "BaseColor",
+      sceneMat.colorTexture,
+      textureMap,
+      sceneMat.colorTextureTexCoord,
+      sceneMat.colorTextureUVTransform,
+      textureTransformExtension
+    );
+    bindTexture(
+      mat,
+      "MetallicRoughness",
+      sceneMat.metallicRoughnessTexture,
+      textureMap,
+      sceneMat.metallicRoughnessTextureTexCoord,
+      sceneMat.metallicRoughnessTextureUVTransform,
+      textureTransformExtension
+    );
+    bindTexture(
+      mat,
+      "Normal",
+      sceneMat.normalsTexture,
+      textureMap,
+      sceneMat.normalsTextureTexCoord,
+      sceneMat.normalsTextureUVTransform,
+      textureTransformExtension
+    );
+    bindTexture(
+      mat,
+      "Occlusion",
+      sceneMat.occlusionTexture,
+      textureMap,
+      sceneMat.occlusionTextureTexCoord,
+      sceneMat.occlusionTextureUVTransform,
+      textureTransformExtension
+    );
+    bindTexture(
+      mat,
+      "Emissive",
+      sceneMat.emissiveTexture,
+      textureMap,
+      sceneMat.emissiveTextureTexCoord,
+      sceneMat.emissiveTextureUVTransform,
+      textureTransformExtension
+    );
   }
   return mat;
 }
@@ -108745,7 +110574,7 @@ function hasNonDefaultTextureTransform(mat) {
 }
 function bindTexture(mat, slot, sceneTex, textureMap, texCoord, uvTransform, textureTransformExtension) {
   if (!sceneTex) return;
-  const gltfTex = textureMap.get(sceneTex.id);
+  const gltfTex = textureMap.get(sceneTex);
   if (!gltfTex) return;
   switch (slot) {
     case "BaseColor":
@@ -108754,7 +110583,13 @@ function bindTexture(mat, slot, sceneTex, textureMap, texCoord, uvTransform, tex
       break;
     case "MetallicRoughness":
       mat.setMetallicRoughnessTexture(gltfTex);
-      applyTextureInfo(mat.getMetallicRoughnessTextureInfo(), sceneTex, texCoord, uvTransform, textureTransformExtension);
+      applyTextureInfo(
+        mat.getMetallicRoughnessTextureInfo(),
+        sceneTex,
+        texCoord,
+        uvTransform,
+        textureTransformExtension
+      );
       break;
     case "Normal":
       mat.setNormalTexture(gltfTex);
@@ -111033,8 +112868,376 @@ var XeoIFCLoader = class extends ModelLoader {
   }
 };
 
-// ../sdk-oct2/src/formats/xgf/versions/v1/unpackXGF.ts
+// ../sdk-oct2/src/formats/xgf/versions/v3/readXGFEnvelope.ts
+function readXGFEnvelope(buffer) {
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 24) throw new Error("Truncated XGF3 header");
+  const header = new DataView(buffer);
+  const [version2, jsonLength, geometryOffset, geometryLength, resourcesOffset, resourcesLength] = Array.from(
+    { length: 6 },
+    (_, i) => header.getUint32(i * 4, true)
+  );
+  if (version2 !== 3 || jsonLength > 16 * 1024 * 1024 || geometryOffset < 24 + jsonLength || geometryOffset % 8 || geometryLength < 12 || resourcesOffset < geometryOffset + geometryLength || resourcesOffset % 8 || resourcesOffset + resourcesLength !== buffer.byteLength) {
+    throw new Error("Invalid XGF3 section bounds");
+  }
+  const metadata = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(buffer, 24, jsonLength)));
+  return { header, metadata, geometryOffset, geometryLength, resourcesOffset, resourcesLength };
+}
+
+// ../sdk-oct2/src/formats/xgf/versions/v3/XGFExternalAssets.ts
+function validateXGFExternalAssets(value, geometry, limit = 1e4) {
+  const data = value;
+  if (!data || !Array.isArray(data.references) || data.references.length > limit)
+    throw new Error("Invalid external asset table or declaration limit exceeded");
+  const keys = new Set(data.references.map(sceneAssetReferenceKey));
+  if (keys.size !== data.references.length) throw new Error("Duplicate external asset identities");
+  const object = (value2) => !!value2 && typeof value2 === "object" && !Array.isArray(value2);
+  const index = (value2, kind) => Number.isSafeInteger(value2) && value2 >= 0 && data.references[value2]?.kind === kind;
+  const groups = ["geometries", "materials", "textures"];
+  const local = {
+    geometries: new Set(geometry.eachGeometryId),
+    materials: new Set(geometry.eachMaterialId),
+    textures: new Set(geometry.eachTextureId)
+  };
+  const kinds = { geometries: "geometry", materials: "material", textures: "texture" };
+  let aliases = 0;
+  for (const group of groups) {
+    if (!object(data[group])) throw new Error(`Invalid external ${group} declarations`);
+    for (const [name14, value2] of Object.entries(data[group])) {
+      if (!name14 || name14.length > 2048 || local[group].has(name14) || !index(value2, kinds[group]))
+        throw new Error(`Invalid or conflicting external ${group} binding '${name14}'`);
+      if (++aliases > limit) throw new Error("External asset alias limit exceeded");
+    }
+  }
+  if (!object(data.materialTextures)) throw new Error("Invalid external material texture bindings");
+  for (const [materialId, bindings] of Object.entries(data.materialTextures)) {
+    if (!local.materials.has(materialId) || !object(bindings))
+      throw new Error(`Unknown embedded material '${materialId}'`);
+    const materialIndex = geometry.eachMaterialId.indexOf(materialId);
+    for (const [slot, reference] of Object.entries(bindings)) {
+      const slotIndex = sceneMaterialTextureSlots.indexOf(slot);
+      if (slotIndex < 0 || !index(reference, "texture") || geometry.eachMaterialTextures[materialIndex * 5 + slotIndex] >= 0) {
+        throw new Error(`Invalid or conflicting texture binding '${materialId}.${slot}'`);
+      }
+    }
+  }
+  for (const id of geometry.eachMeshGeometryId) {
+    if (id && !local.geometries.has(id) && !Object.prototype.hasOwnProperty.call(data.geometries, id))
+      throw new Error(`Unresolved geometry '${id}'`);
+  }
+  for (const id of geometry.eachMeshMaterialId) {
+    if (id && !local.materials.has(id) && !Object.prototype.hasOwnProperty.call(data.materials, id))
+      throw new Error(`Unresolved material '${id}'`);
+  }
+  return data;
+}
+
+// ../sdk-oct2/src/formats/xgf/versions/v2/unpackXGF.ts
 function unpackXGF(arrayBuffer) {
+  const header = new DataView(arrayBuffer);
+  if (header.byteLength < 12 || header.getUint32(0, true) !== 2) {
+    throw new Error("Invalid XGF2 header");
+  }
+  const firstArrayOffset = header.getUint32(4, true);
+  if (firstArrayOffset < 4 + 41 * 8 || (firstArrayOffset - 4) % 8 !== 0 || firstArrayOffset > arrayBuffer.byteLength) {
+    throw new Error("Invalid XGF2 array directory");
+  }
+  const arrayCount = (firstArrayOffset - 4) / 8;
+  const legacyFrameLayout = arrayCount === 67;
+  let previousEnd = firstArrayOffset;
+  for (let i = 0; i < arrayCount; i++) {
+    const offset = header.getUint32(4 + i * 8, true);
+    const length2 = header.getUint32(8 + i * 8, true);
+    if (offset < previousEnd || offset + length2 > arrayBuffer.byteLength) {
+      throw new Error(`Invalid XGF2 array range at ${i}`);
+    }
+    previousEnd = offset + length2;
+  }
+  const requiresSwapFromLittleEndian = (function() {
+    const b2 = new ArrayBuffer(2);
+    new Uint16Array(b2)[0] = 1;
+    return new Uint8Array(b2)[0] !== 1;
+  })();
+  const nextArray = (function() {
+    let i = 0;
+    const dataView = new DataView(arrayBuffer);
+    return function(type) {
+      if (i >= arrayCount) {
+        return new type(0);
+      }
+      const idx = 1 + 2 * i++;
+      const byteOffset = dataView.getUint32(idx * 4, true);
+      const byteLength = dataView.getUint32((idx + 1) * 4, true);
+      const BPE = type.BYTES_PER_ELEMENT;
+      if (byteOffset % BPE || byteLength % BPE) {
+        throw new Error(`Invalid XGF2 array alignment at ${i - 1}`);
+      }
+      if (requiresSwapFromLittleEndian && BPE > 1) {
+        const subarray = new Uint8Array(arrayBuffer, byteOffset, byteLength);
+        const swaps = BPE / 2;
+        const cnt = subarray.length / BPE;
+        for (let b2 = 0; b2 < cnt; b2++) {
+          const offset = b2 * BPE;
+          for (let j = 0; j < swaps; j++) {
+            const i1 = offset + j;
+            const i2 = offset - j + BPE - 1;
+            const tmp = subarray[i1];
+            subarray[i1] = subarray[i2];
+            subarray[i2] = tmp;
+          }
+        }
+      }
+      return new type(arrayBuffer, byteOffset, byteLength / BPE);
+    };
+  })();
+  const nextStringRefs = (function() {
+    const decoder = new TextDecoder();
+    return () => {
+      const bytes = nextArray(Uint8Array);
+      if (bytes.byteLength === 0) {
+        return [];
+      }
+      if (bytes[0] === 91 || bytes[0] === 123) {
+        try {
+          const values3 = JSON.parse(decoder.decode(bytes));
+          if (Array.isArray(values3) && values3.every((value) => typeof value === "string")) {
+            return values3;
+          }
+        } catch (_error) {
+        }
+      }
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      if (bytes.byteLength < 16) throw new Error("Invalid XGF2 string table header");
+      const numStrings = view.getUint32(0, true);
+      const numValues = view.getUint32(4, true);
+      const stringBytesLength = view.getUint32(8, true);
+      const offsetsByteOffset = 12;
+      const indicesByteOffset = offsetsByteOffset + (numStrings + 1) * 4;
+      const stringBytesOffset = indicesByteOffset + numValues * 4;
+      if (stringBytesOffset + stringBytesLength !== bytes.byteLength) {
+        throw new Error("Invalid XGF2 string table bounds");
+      }
+      let previousOffset = 0;
+      for (let i = 0; i <= numStrings; i++) {
+        const offset = view.getUint32(offsetsByteOffset + i * 4, true);
+        if (i === 0 && offset !== 0 || offset < previousOffset || offset > stringBytesLength) {
+          throw new Error("Invalid XGF2 string offset");
+        }
+        previousOffset = offset;
+      }
+      if (previousOffset !== stringBytesLength) throw new Error("Invalid XGF2 string data length");
+      for (let i = 0; i < numValues; i++) {
+        if (view.getUint32(indicesByteOffset + i * 4, true) >= numStrings) {
+          throw new Error("Invalid XGF2 string index");
+        }
+      }
+      const strings2 = [];
+      for (let i = 0; i < numStrings; i++) {
+        const start = view.getUint32(offsetsByteOffset + i * 4, true);
+        const end = view.getUint32(offsetsByteOffset + (i + 1) * 4, true);
+        strings2.push(decoder.decode(bytes.subarray(stringBytesOffset + start, stringBytesOffset + end)));
+      }
+      const values2 = new Array(numValues);
+      for (let i = 0; i < numValues; i++) {
+        const index = view.getUint32(indicesByteOffset + i * 4, true);
+        values2[i] = strings2[index] || "";
+      }
+      if (stringBytesLength === 0 && numStrings > 0) {
+        return values2;
+      }
+      return values2;
+    };
+  })();
+  const nextIndexArray = (indexSize2) => indexSize2[0] === 2 ? nextArray(Uint16Array) : nextArray(Uint32Array);
+  const positions = nextArray(Uint16Array);
+  const colors = nextArray(Uint8Array);
+  const indexSize = nextArray(Uint8Array);
+  const indices = nextIndexArray(indexSize);
+  const edgeIndexSize = nextArray(Uint8Array);
+  const edgeIndices = nextIndexArray(edgeIndexSize);
+  const data = {
+    positions,
+    colors,
+    indexSize,
+    indices,
+    edgeIndexSize,
+    edgeIndices,
+    aabbs: nextArray(Float32Array),
+    normals: nextArray(Uint16Array),
+    uvs: nextArray(Float32Array),
+    scales: nextArray(Float32Array),
+    rotations: nextArray(Uint8Array),
+    eachGeometryPositionsBase: nextArray(Uint32Array),
+    eachGeometryColorsBase: nextArray(Uint32Array),
+    eachGeometryIndicesBase: nextArray(Uint32Array),
+    eachGeometryEdgeIndicesBase: nextArray(Uint32Array),
+    eachGeometryNormalsBase: nextArray(Uint32Array),
+    eachGeometryUVsBase: nextArray(Uint32Array),
+    eachGeometryScalesBase: nextArray(Uint32Array),
+    eachGeometryRotationsBase: nextArray(Uint32Array),
+    eachGeometryPrimitiveType: nextArray(Uint8Array),
+    eachGeometryAABBBase: nextArray(Uint32Array),
+    matrices: nextArray(Float64Array),
+    textureData: nextArray(Uint8Array),
+    eachTextureDataBase: nextArray(Uint32Array),
+    eachTextureMediaType: nextArray(Uint8Array),
+    eachTextureWidth: nextArray(Uint16Array),
+    eachTextureHeight: nextArray(Uint16Array),
+    eachTextureSampler: nextArray(Uint8Array),
+    eachTextureEncoding: nextArray(Uint16Array),
+    eachTextureId: nextStringRefs(),
+    eachMaterialPBR: nextArray(Uint8Array),
+    eachMaterialColor: nextArray(Float32Array),
+    eachMaterialTextures: nextArray(Int32Array),
+    eachMaterialId: nextStringRefs(),
+    eachMaterialTriplanarScale: nextArray(Float32Array),
+    eachMeshGeometriesBase: nextArray(Uint32Array),
+    eachMeshMatricesBase: nextArray(Uint32Array),
+    eachMeshMaterialAttributes: nextArray(Uint8Array),
+    eachMeshMaterial: nextArray(Int32Array),
+    eachObjectId: nextStringRefs(),
+    eachObjectMeshesBase: nextArray(Uint32Array),
+    eachGeometryId: nextStringRefs(),
+    eachMeshGeometryId: nextStringRefs(),
+    eachMeshMaterialId: nextStringRefs(),
+    eachTransformId: nextStringRefs(),
+    eachTransformParentId: nextStringRefs(),
+    eachTransformMatricesBase: nextArray(Uint32Array),
+    eachMeshParentTransformId: nextStringRefs(),
+    eachMeshId: legacyFrameLayout ? [] : nextStringRefs(),
+    eachVariantSetId: nextStringRefs(),
+    eachVariantSetDefaultVariantId: nextStringRefs(),
+    eachVariantSetSelectionStrategy: nextArray(Uint8Array),
+    eachVariantSetHysteresisPixels: nextArray(Float32Array),
+    eachVariantSetVariantsBase: nextArray(Uint32Array),
+    eachVariantId: nextStringRefs(),
+    eachVariantRangeMinPixels: nextArray(Float32Array),
+    eachVariantRangeMaxPixels: nextArray(Float32Array),
+    eachVariantObjectIdsBase: nextArray(Uint32Array),
+    variantObjectIds: nextStringRefs(),
+    framePositions: nextArray(Uint16Array),
+    frameNormals: nextArray(Uint16Array),
+    frameAABBs: nextArray(Float32Array),
+    frameTimes: nextArray(Float32Array),
+    eachGeometryFramesBase: nextArray(Uint32Array),
+    eachGeometryFramesCount: legacyFrameLayout ? new Uint32Array(0) : nextArray(Uint32Array),
+    eachGeometryVertexStatesBase: legacyFrameLayout ? new Uint32Array(0) : nextArray(Uint32Array),
+    eachGeometryVertexStatesCount: legacyFrameLayout ? new Uint32Array(0) : nextArray(Uint32Array),
+    eachFramePositionsBase: nextArray(Uint32Array),
+    eachFrameNormalsBase: nextArray(Uint32Array),
+    eachFrameAABBBase: nextArray(Uint32Array),
+    eachMeshFrameTime: nextArray(Float32Array),
+    eachMaterialOptical: nextArray(Float32Array),
+    eachMaterialIor: nextArray(Float32Array),
+    extraTexCoords: nextArray(Float32Array),
+    eachGeometryExtraTexCoord: nextArray(Uint32Array),
+    eachMaterialTextureTexCoord: nextArray(Uint16Array),
+    eachMaterialTextureTransforms: nextArray(Float32Array),
+    morphTargetPositions: nextArray(Float32Array),
+    morphTargetNormals: nextArray(Float32Array),
+    eachGeometryMorphTargetsBase: nextArray(Uint32Array),
+    eachMorphTargetPositionsBase: nextArray(Uint32Array),
+    eachMorphTargetNormalsBase: nextArray(Uint32Array),
+    eachMorphTargetId: nextStringRefs(),
+    eachMorphTargetName: nextStringRefs(),
+    morphWeights: nextArray(Float32Array),
+    eachMeshMorphWeightsBase: nextArray(Uint32Array),
+    animationParamsJson: nextStringRefs(),
+    morphTargetUVs: nextArray(Float32Array),
+    eachMorphTargetUVsBase: nextArray(Uint32Array),
+    eachMaterialEmissionAndCoat: nextArray(Float32Array),
+    eachMeshBillboard: nextArray(Uint8Array),
+    eachMeshBin: nextStringRefs(),
+    frameUVs: nextArray(Float32Array),
+    eachFrameUVsBase: nextArray(Uint32Array),
+    eachFrameId: nextStringRefs(),
+    eachFrameName: nextStringRefs()
+  };
+  if (legacyFrameLayout) {
+    data.eachGeometryFramesCount = inferLegacyFrameCounts(data.eachGeometryFramesBase, data.frameTimes.length);
+  }
+  validateRecordRanges(
+    data.eachGeometryFramesBase,
+    data.eachGeometryFramesCount,
+    Math.min(data.eachFramePositionsBase.length, data.eachFrameNormalsBase.length, data.eachFrameAABBBase.length, data.frameTimes.length),
+    "frames"
+  );
+  validateRecordRanges(
+    data.eachGeometryVertexStatesBase,
+    data.eachGeometryVertexStatesCount,
+    Math.min(data.eachFramePositionsBase.length, data.eachFrameNormalsBase.length, data.eachFrameAABBBase.length),
+    "vertex states"
+  );
+  validateBases(data.eachObjectMeshesBase, data.eachMeshGeometriesBase.length, "object meshes");
+  validateBases(data.eachVariantSetVariantsBase, data.eachVariantId.length, "variants");
+  validateBases(data.eachVariantObjectIdsBase, data.variantObjectIds.length, "variant objects");
+  return data;
+}
+function inferLegacyFrameCounts(bases, frameCount) {
+  const counts = new Uint32Array(bases.length);
+  let end = frameCount;
+  for (let i = bases.length - 1; i >= 0; i--) {
+    const base = bases[i];
+    if (base === 4294967295) continue;
+    if (base > end) throw new Error(`Invalid XGF2 legacy frames range at ${i}`);
+    counts[i] = end - base;
+    end = base;
+  }
+  return counts;
+}
+function validateRecordRanges(bases, counts, available, name14) {
+  if (bases.length !== counts.length) throw new Error(`Invalid XGF2 ${name14} table lengths`);
+  for (let i = 0; i < bases.length; i++) {
+    if (bases[i] === 4294967295 ? counts[i] !== 0 : bases[i] + counts[i] > available) {
+      throw new Error(`Invalid XGF2 ${name14} range at ${i}`);
+    }
+  }
+}
+function validateBases(bases, available, name14) {
+  let previous = 0;
+  for (const base of bases) {
+    if (base < previous || base > available) throw new Error(`Invalid XGF2 ${name14} range`);
+    previous = base;
+  }
+}
+
+// ../sdk-oct2/src/formats/xgf/prepareXGFAssets.ts
+async function prepareXGFAssets(buffer, scene, options = {}) {
+  try {
+    if (buffer.byteLength < 4 || new DataView(buffer).getUint32(0, true) !== 3) return { ok: true, value: void 0 };
+    const envelope = readXGFEnvelope(buffer);
+    if (envelope.metadata.schema !== 4) return { ok: true, value: void 0 };
+    const geometry = unpackXGF(
+      buffer.slice(envelope.geometryOffset, envelope.geometryOffset + envelope.geometryLength)
+    );
+    const declarations = validateXGFExternalAssets(
+      envelope.metadata.externalAssets,
+      geometry,
+      options.assetLimits?.maxReferences
+    );
+    return SceneAssetResolver.forScene(scene).resolve(declarations.references, options.resolveAssets, {
+      ...options.assetLimits,
+      signal: options.signal
+    });
+  } catch (cause) {
+    return sdkFailure(cause);
+  }
+}
+
+// ../sdk-oct2/src/formats/xgf/sceneMutation.ts
+var queues = /* @__PURE__ */ new WeakMap();
+function mutateXGFScene(scene, operation) {
+  const previous = queues.get(scene) ?? Promise.resolve();
+  const pending = previous.then(operation, operation);
+  queues.set(scene, pending);
+  void pending.finally(() => {
+    if (queues.get(scene) === pending) queues.delete(scene);
+  }).catch(() => {
+  });
+  return pending;
+}
+
+// ../sdk-oct2/src/formats/xgf/versions/v1/unpackXGF.ts
+function unpackXGF2(arrayBuffer) {
   const requiresSwapFromLittleEndian = (function() {
     const b2 = new ArrayBuffer(2);
     new Uint16Array(b2)[0] = 1;
@@ -111470,11 +113673,247 @@ function nextNonSentinelBase(bases, startIdx, arrayLength) {
 async function parse5(params, options) {
   const { fileData, sceneModel, dataModel } = params;
   await xgfToModel({
-    xgfData: unpackXGF(fileData),
+    xgfData: unpackXGF2(fileData),
     sceneModel,
     dataModel,
     options
   });
+}
+
+// ../sdk-oct2/src/formats/xgf/versions/v2/readXGFGeometry.ts
+var NO_INDEX2 = 4294967295;
+function readXGFGeometry(xgfData, geometryIdx, geometryId, options = {}) {
+  const ignoreNormals = options.ignoreNormals === true, ignoreUVs = options.ignoreUVs === true;
+  const {
+    positions,
+    colors,
+    indices,
+    edgeIndices,
+    aabbs,
+    normals,
+    uvs,
+    scales,
+    rotations,
+    eachGeometryPositionsBase,
+    eachGeometryColorsBase,
+    eachGeometryIndicesBase,
+    eachGeometryEdgeIndicesBase,
+    eachGeometryNormalsBase,
+    eachGeometryUVsBase,
+    eachGeometryScalesBase,
+    eachGeometryRotationsBase,
+    eachGeometryAABBBase,
+    eachGeometryPrimitiveType,
+    extraTexCoords,
+    eachGeometryExtraTexCoord,
+    morphTargetPositions,
+    morphTargetNormals,
+    eachGeometryMorphTargetsBase,
+    eachMorphTargetPositionsBase,
+    eachMorphTargetNormalsBase,
+    eachMorphTargetId,
+    eachMorphTargetName,
+    framePositions,
+    frameNormals,
+    frameAABBs,
+    frameTimes,
+    eachGeometryFramesBase,
+    eachGeometryFramesCount,
+    eachGeometryVertexStatesBase,
+    eachGeometryVertexStatesCount,
+    eachFramePositionsBase,
+    eachFrameNormalsBase,
+    eachFrameAABBBase
+  } = xgfData;
+  const numGeometries = eachGeometryPositionsBase.length;
+  if (!Number.isSafeInteger(geometryIdx) || geometryIdx < 0 || geometryIdx >= numGeometries)
+    throw new Error("Invalid XGF geometry index");
+  const params = { id: geometryId };
+  switch (eachGeometryPrimitiveType[geometryIdx]) {
+    case 0:
+      params.primitive = TrianglesPrimitive;
+      break;
+    case 1:
+      params.primitive = SolidPrimitive;
+      break;
+    case 2:
+      params.primitive = SurfacePrimitive;
+      break;
+    case 3:
+      params.primitive = LinesPrimitive;
+      break;
+    case 4:
+      params.primitive = PointsPrimitive;
+      break;
+    case 5:
+      params.primitive = GaussianSplatsPrimitive;
+      break;
+  }
+  const aabbsBase = eachGeometryAABBBase[geometryIdx];
+  params.aabb = aabbs.subarray(aabbsBase, aabbsBase + 6);
+  const atLastGeometry = geometryIdx === numGeometries - 1;
+  const posStart = eachGeometryPositionsBase[geometryIdx];
+  const posEnd = atLastGeometry ? positions.length : eachGeometryPositionsBase[geometryIdx + 1];
+  const indStart = eachGeometryIndicesBase[geometryIdx];
+  const indEnd = atLastGeometry ? indices.length : eachGeometryIndicesBase[geometryIdx + 1];
+  const edgeStart = eachGeometryEdgeIndicesBase[geometryIdx];
+  const edgeEnd = atLastGeometry ? edgeIndices.length : eachGeometryEdgeIndicesBase[geometryIdx + 1];
+  params.positionsCompressed = positions.subarray(posStart, posEnd);
+  if (params.primitive !== PointsPrimitive && params.primitive !== GaussianSplatsPrimitive) {
+    params.indices = indices.subarray(indStart, indEnd);
+  }
+  const edgeSlice = edgeIndices.subarray(edgeStart, edgeEnd);
+  if (edgeSlice.length > 0) params.edgeIndices = edgeSlice;
+  const colStart = eachGeometryColorsBase[geometryIdx];
+  const colEnd = atLastGeometry ? colors.length : eachGeometryColorsBase[geometryIdx + 1];
+  const colSlice = colors.subarray(colStart, colEnd);
+  if (colSlice.length > 0) params.colorsCompressed = colSlice;
+  const normalsBaseI = eachGeometryNormalsBase[geometryIdx];
+  if (!ignoreNormals && normalsBaseI !== NO_INDEX2) {
+    const normalsEnd = nextNonSentinelBase2(eachGeometryNormalsBase, geometryIdx, normals.length);
+    params.normalsCompressed = normals.subarray(normalsBaseI, normalsEnd);
+  }
+  const uvsBaseI = eachGeometryUVsBase[geometryIdx];
+  if (!ignoreUVs && uvsBaseI !== NO_INDEX2) {
+    const uvsEnd = nextNonSentinelBase2(eachGeometryUVsBase, geometryIdx, uvs.length);
+    params.uvsCompressed = uvs.subarray(uvsBaseI, uvsEnd);
+  }
+  if (!ignoreUVs && eachGeometryExtraTexCoord && eachGeometryExtraTexCoord.length > 0) {
+    const texCoordsCompressed = {};
+    if (params.uvsCompressed) {
+      texCoordsCompressed[0] = params.uvsCompressed;
+    }
+    const vertexTexCoordLength = params.positionsCompressed.length / 3 * 2;
+    for (let record = 0; record < eachGeometryExtraTexCoord.length; record += 3) {
+      if (eachGeometryExtraTexCoord[record] !== geometryIdx) {
+        continue;
+      }
+      const channel = eachGeometryExtraTexCoord[record + 1];
+      const base = eachGeometryExtraTexCoord[record + 2];
+      texCoordsCompressed[channel] = extraTexCoords.subarray(base, base + vertexTexCoordLength);
+    }
+    if (Object.keys(texCoordsCompressed).length > 0) {
+      params.texCoordsCompressed = texCoordsCompressed;
+    }
+  }
+  const scalesBaseI = eachGeometryScalesBase[geometryIdx];
+  if (scalesBaseI !== NO_INDEX2) {
+    const scalesEnd = nextNonSentinelBase2(eachGeometryScalesBase, geometryIdx, scales.length);
+    params.scales = scales.subarray(scalesBaseI, scalesEnd);
+  }
+  const rotationsBaseI = eachGeometryRotationsBase[geometryIdx];
+  if (rotationsBaseI !== NO_INDEX2) {
+    const rotationsEnd = nextNonSentinelBase2(eachGeometryRotationsBase, geometryIdx, rotations.length);
+    const decoded = new Float32Array(rotationsEnd - rotationsBaseI);
+    for (let i = 0; i < decoded.length; i++) {
+      decoded[i] = (rotations[rotationsBaseI + i] - 128) / 128;
+    }
+    params.rotations = decoded;
+  }
+  const framesBaseI = eachGeometryFramesBase?.[geometryIdx] ?? NO_INDEX2;
+  if (framesBaseI !== NO_INDEX2) {
+    const framesEnd = framesBaseI + (eachGeometryFramesCount?.[geometryIdx] ?? 0);
+    if (framesEnd > eachFramePositionsBase.length) throw new Error("XGF geometry frame count exceeds its payload");
+    const framesCompressed = [];
+    for (let frameIdx = framesBaseI; frameIdx < framesEnd; frameIdx++) {
+      const framePositionsStart = eachFramePositionsBase[frameIdx];
+      const framePositionsEnd = nextNonSentinelBase2(eachFramePositionsBase, frameIdx, framePositions.length);
+      const frameAABBStart = eachFrameAABBBase[frameIdx];
+      const frame = {
+        time: frameTimes[frameIdx],
+        aabb: frameAABBs.subarray(frameAABBStart, frameAABBStart + 6),
+        positionsCompressed: framePositions.subarray(framePositionsStart, framePositionsEnd)
+      };
+      const frameNormalsStart = eachFrameNormalsBase[frameIdx];
+      if (!ignoreNormals && frameNormalsStart !== NO_INDEX2) {
+        const frameNormalsEnd = nextNonSentinelBase2(eachFrameNormalsBase, frameIdx, frameNormals.length);
+        frame.normalsCompressed = frameNormals.subarray(frameNormalsStart, frameNormalsEnd);
+      }
+      restoreFrameExtras(frame, frameIdx, xgfData, ignoreUVs);
+      framesCompressed.push(frame);
+    }
+    if (framesCompressed.length > 0) {
+      params.framesCompressed = framesCompressed;
+    }
+  }
+  const vertexStatesBaseI = eachGeometryVertexStatesBase?.[geometryIdx] ?? NO_INDEX2;
+  if (vertexStatesBaseI !== NO_INDEX2) {
+    const vertexStatesEnd = vertexStatesBaseI + (eachGeometryVertexStatesCount?.[geometryIdx] ?? 0);
+    if (vertexStatesEnd > eachFramePositionsBase.length)
+      throw new Error("XGF geometry state count exceeds its payload");
+    const vertexStatesCompressed = [];
+    for (let stateIdx = vertexStatesBaseI; stateIdx < vertexStatesEnd; stateIdx++) {
+      const statePositionsStart = eachFramePositionsBase[stateIdx];
+      const statePositionsEnd = nextNonSentinelBase2(eachFramePositionsBase, stateIdx, framePositions.length);
+      const stateAABBStart = eachFrameAABBBase[stateIdx];
+      const state = {
+        aabb: frameAABBs.subarray(stateAABBStart, stateAABBStart + 6),
+        positionsCompressed: framePositions.subarray(statePositionsStart, statePositionsEnd)
+      };
+      const stateNormalsStart = eachFrameNormalsBase[stateIdx];
+      if (!ignoreNormals && stateNormalsStart !== NO_INDEX2) {
+        const stateNormalsEnd = nextNonSentinelBase2(eachFrameNormalsBase, stateIdx, frameNormals.length);
+        state.normalsCompressed = frameNormals.subarray(stateNormalsStart, stateNormalsEnd);
+      }
+      restoreFrameExtras(state, stateIdx, xgfData, ignoreUVs);
+      vertexStatesCompressed.push(state);
+    }
+    if (vertexStatesCompressed.length > 0) {
+      params.vertexStatesCompressed = vertexStatesCompressed;
+    }
+  }
+  const morphTargetsBaseI = eachGeometryMorphTargetsBase?.[geometryIdx] ?? NO_INDEX2;
+  if (morphTargetsBaseI !== NO_INDEX2) {
+    const morphTargetsEnd = nextNonSentinelBase2(
+      eachGeometryMorphTargetsBase,
+      geometryIdx,
+      eachMorphTargetPositionsBase.length
+    );
+    const morphTargets = [];
+    const vertexPositionLength = params.positionsCompressed.length;
+    for (let targetIdx = morphTargetsBaseI; targetIdx < morphTargetsEnd; targetIdx++) {
+      const targetPositionsStart = eachMorphTargetPositionsBase[targetIdx];
+      const target = {};
+      if (targetPositionsStart !== NO_INDEX2) {
+        target.positions = morphTargetPositions.subarray(
+          targetPositionsStart,
+          targetPositionsStart + vertexPositionLength
+        );
+      }
+      const id = eachMorphTargetId?.[targetIdx] || "";
+      const name14 = eachMorphTargetName?.[targetIdx] || "";
+      if (id) target.id = id;
+      if (name14) target.name = name14;
+      const targetNormalsStart = eachMorphTargetNormalsBase[targetIdx];
+      if (!ignoreNormals && targetNormalsStart !== NO_INDEX2) {
+        target.normals = morphTargetNormals.subarray(targetNormalsStart, targetNormalsStart + vertexPositionLength);
+      }
+      const uvStart = xgfData.eachMorphTargetUVsBase?.[targetIdx] ?? NO_INDEX2;
+      if (!ignoreUVs && uvStart !== NO_INDEX2) {
+        target.uvs = xgfData.morphTargetUVs.subarray(uvStart, uvStart + vertexPositionLength / 3 * 2);
+      }
+      morphTargets.push(target);
+    }
+    if (morphTargets.length > 0) {
+      params.morphTargets = morphTargets;
+    }
+  }
+  return params;
+}
+function restoreFrameExtras(frame, index, data, ignoreUVs) {
+  if (data.eachFrameId?.[index]) frame.id = data.eachFrameId[index];
+  if (data.eachFrameName?.[index]) frame.name = data.eachFrameName[index];
+  const base = data.eachFrameUVsBase?.[index] ?? NO_INDEX2;
+  if (!ignoreUVs && base !== NO_INDEX2) {
+    const end = nextNonSentinelBase2(data.eachFrameUVsBase, index, data.frameUVs.length);
+    frame.uvsCompressed = data.frameUVs.subarray(base, end);
+  }
+}
+function nextNonSentinelBase2(bases, startIdx, arrayLength) {
+  for (let i = startIdx + 1; i < bases.length; i++) {
+    if (bases[i] !== NO_INDEX2) return bases[i];
+  }
+  return arrayLength;
 }
 
 // ../sdk-oct2/src/formats/xgf/versions/v2/xgfToModel.ts
@@ -111482,7 +113921,7 @@ var NUM_MATERIAL_ATTRIBUTES2 = 4;
 var NUM_MATERIAL_TEXTURE_REFS2 = 5;
 var NUM_MATERIAL_PBR_BYTES2 = 8;
 var NUM_TEXTURE_SAMPLER_BYTES2 = 5;
-var NO_INDEX2 = 4294967295;
+var NO_INDEX3 = 4294967295;
 var SAMPLER_DECODE2 = {
   1: RepeatWrapping,
   2: ClampToEdgeWrapping,
@@ -111762,11 +114201,7 @@ async function xgfToModel2(params) {
       const tBase = i * NUM_MATERIAL_TEXTURE_REFS2;
       const params2 = {
         id,
-        color: [
-          eachMaterialColor[i * 3],
-          eachMaterialColor[i * 3 + 1],
-          eachMaterialColor[i * 3 + 2]
-        ],
+        color: [eachMaterialColor[i * 3], eachMaterialColor[i * 3 + 1], eachMaterialColor[i * 3 + 2]],
         opacity: eachMaterialPBR[base + 3] / 255,
         roughness: eachMaterialPBR[base + 4] / 255,
         metallic: eachMaterialPBR[base + 5] / 255,
@@ -111805,6 +114240,7 @@ async function xgfToModel2(params) {
       if (normalsIdx >= 0) params2.normalsTextureId = createdTextureIds[normalsIdx];
       if (occlusionIdx >= 0) params2.occlusionTextureId = createdTextureIds[occlusionIdx];
       if (emissiveIdx >= 0) params2.emissiveTextureId = createdTextureIds[emissiveIdx];
+      Object.assign(params2, options.externalMaterialTextures?.[eachMaterialId[i]]);
       readMaterialTextureBindingState(params2, i, eachMaterialTextureTexCoord, eachMaterialTextureTransforms);
       const materialResult = sceneModel.createMaterial(params2);
       if (materialResult && materialResult.ok === false) {
@@ -111822,6 +114258,7 @@ async function xgfToModel2(params) {
       const parentId = eachTransformParentId?.[i] || "";
       const transformResult = sceneModel.createTransform({
         id,
+        source: options.sourceMappings?.transforms?.[eachTransformId[i]],
         matrix: transformMatrix(matrices.subarray(matricesBase, matricesBase + 16), !parentId)
       });
       if (transformResult && transformResult.ok === false) {
@@ -111848,238 +114285,86 @@ async function xgfToModel2(params) {
       }
     }
   }
-  if (sceneModel) for (const source of options?.lights ?? []) {
-    const { frameMatrix, ...definition } = source;
-    const id = prefixId(source.id);
-    let parentTransformId = source.parentTransformId ? prefixId(source.parentTransformId) : void 0;
-    if (!parentTransformId) {
-      parentTransformId = `${id}::light-frame`;
-      const matrix = transformMatrix(frameMatrix ?? identityMat4(), true);
-      const existing2 = sceneModel.transforms[parentTransformId];
-      if (existing2 && existing2.matrix.some((v, i) => Math.abs(v - matrix[i]) > 1e-9)) {
-        fail2(`Conflicting light frame '${id}'`);
-        return;
+  if (sceneModel)
+    for (const source of options?.lights ?? []) {
+      const { frameMatrix, ...definition } = source;
+      const id = prefixId(source.id);
+      let parentTransformId = source.parentTransformId ? prefixId(source.parentTransformId) : void 0;
+      if (!parentTransformId) {
+        parentTransformId = `${id}::light-frame`;
+        const matrix = transformMatrix(frameMatrix ?? identityMat4(), true);
+        const existing2 = sceneModel.transforms[parentTransformId];
+        if (existing2 && existing2.matrix.some((v, i) => Math.abs(v - matrix[i]) > 1e-9)) {
+          fail2(`Conflicting light frame '${id}'`);
+          return;
+        }
+        if (!existing2) {
+          const result = sceneModel.createTransform({ id: parentTransformId, matrix });
+          if (result.ok === false) {
+            fail2(result.error, result.type);
+            return;
+          }
+          createdIds?.transforms.push(parentTransformId);
+        }
       }
-      if (!existing2) {
-        const result = sceneModel.createTransform({ id: parentTransformId, matrix });
+      const params2 = { ...definition, id, parentTransformId };
+      const existing = sceneModel.lights[id];
+      if (existing) {
+        const current = existing.toParams();
+        if (current.ok === false || Object.keys(params2).some(
+          (key) => JSON.stringify(params2[key]) !== JSON.stringify(current.value[key])
+        )) {
+          fail2(`Conflicting light '${id}'`);
+          return;
+        }
+      } else {
+        const result = sceneModel.createLight(params2);
         if (result.ok === false) {
           fail2(result.error, result.type);
           return;
         }
-        createdIds?.transforms.push(parentTransformId);
+        (createdIds?.lights ?? (createdIds ? createdIds.lights = [] : [])).push(id);
       }
     }
-    const params2 = { ...definition, id, parentTransformId };
-    const existing = sceneModel.lights[id];
-    if (existing) {
-      const current = existing.toParams();
-      if (current.ok === false || Object.keys(params2).some((key) => JSON.stringify(params2[key]) !== JSON.stringify(current.value[key]))) {
-        fail2(`Conflicting light '${id}'`);
-        return;
+  if (sceneModel)
+    for (const source of options?.clipBoxes ?? []) {
+      const id = prefixId(source.id);
+      let parentTransformId = source.parentTransformId ? prefixId(source.parentTransformId) : void 0;
+      if (!parentTransformId) {
+        parentTransformId = `${id}::clip-frame`;
+        if (!sceneModel.transforms[parentTransformId]) {
+          const result = sceneModel.createTransform({
+            id: parentTransformId,
+            matrix: transformMatrix(source.frameMatrix ?? identityMat4(), true)
+          });
+          if (result.ok === false) {
+            fail2(result.error, result.type);
+            return;
+          }
+          createdIds?.transforms.push(parentTransformId);
+        }
       }
-    } else {
-      const result = sceneModel.createLight(params2);
-      if (result.ok === false) {
-        fail2(result.error, result.type);
-        return;
-      }
-      (createdIds?.lights ?? (createdIds ? createdIds.lights = [] : [])).push(id);
-    }
-  }
-  if (sceneModel) for (const source of options?.clipBoxes ?? []) {
-    const id = prefixId(source.id);
-    let parentTransformId = source.parentTransformId ? prefixId(source.parentTransformId) : void 0;
-    if (!parentTransformId) {
-      parentTransformId = `${id}::clip-frame`;
-      if (!sceneModel.transforms[parentTransformId]) {
-        const result = sceneModel.createTransform({ id: parentTransformId, matrix: transformMatrix(source.frameMatrix ?? identityMat4(), true) });
+      const params2 = { id, aabb: source.aabb, active: source.active, parentTransformId };
+      const existing = sceneModel.clipBoxes[id];
+      if (existing) {
+        if (existing.parentTransform?.id !== parentTransformId || existing.active !== (source.active !== false) || existing.aabb.some((v, i) => v !== source.aabb[i])) {
+          fail2(`Conflicting clip box '${id}'`);
+          return;
+        }
+      } else {
+        const result = sceneModel.createClipBox(params2);
         if (result.ok === false) {
           fail2(result.error, result.type);
           return;
         }
-        createdIds?.transforms.push(parentTransformId);
+        (createdIds?.clipBoxes ?? (createdIds ? createdIds.clipBoxes = [] : [])).push(id);
       }
     }
-    const params2 = { id, aabb: source.aabb, active: source.active, parentTransformId };
-    const existing = sceneModel.clipBoxes[id];
-    if (existing) {
-      if (existing.parentTransform?.id !== parentTransformId || existing.active !== (source.active !== false) || existing.aabb.some((v, i) => v !== source.aabb[i])) {
-        fail2(`Conflicting clip box '${id}'`);
-        return;
-      }
-    } else {
-      const result = sceneModel.createClipBox(params2);
-      if (result.ok === false) {
-        fail2(result.error, result.type);
-        return;
-      }
-      (createdIds?.clipBoxes ?? (createdIds ? createdIds.clipBoxes = [] : [])).push(id);
-    }
-  }
   let nextMeshId = sceneModel && !meshIdPrefix ? nextAvailableNumericMeshId(sceneModel) : 0;
   const floatColor = createVec3Float32();
   const createLocalGeometry = (geometryIdx, geometryId) => {
     if (!sceneModel || sceneModel.geometries[geometryId]) return true;
-    const params2 = { id: geometryId };
-    switch (eachGeometryPrimitiveType[geometryIdx]) {
-      case 0:
-        params2.primitive = TrianglesPrimitive;
-        break;
-      case 1:
-        params2.primitive = SolidPrimitive;
-        break;
-      case 2:
-        params2.primitive = SurfacePrimitive;
-        break;
-      case 3:
-        params2.primitive = LinesPrimitive;
-        break;
-      case 4:
-        params2.primitive = PointsPrimitive;
-        break;
-      case 5:
-        params2.primitive = GaussianSplatsPrimitive;
-        break;
-    }
-    const aabbsBase = eachGeometryAABBBase[geometryIdx];
-    params2.aabb = aabbs.subarray(aabbsBase, aabbsBase + 6);
-    const atLastGeometry = geometryIdx === numGeometries - 1;
-    const posStart = eachGeometryPositionsBase[geometryIdx];
-    const posEnd = atLastGeometry ? positions.length : eachGeometryPositionsBase[geometryIdx + 1];
-    const indStart = eachGeometryIndicesBase[geometryIdx];
-    const indEnd = atLastGeometry ? indices.length : eachGeometryIndicesBase[geometryIdx + 1];
-    const edgeStart = eachGeometryEdgeIndicesBase[geometryIdx];
-    const edgeEnd = atLastGeometry ? edgeIndices.length : eachGeometryEdgeIndicesBase[geometryIdx + 1];
-    params2.positionsCompressed = positions.subarray(posStart, posEnd);
-    if (params2.primitive !== PointsPrimitive && params2.primitive !== GaussianSplatsPrimitive) {
-      params2.indices = indices.subarray(indStart, indEnd);
-    }
-    const edgeSlice = edgeIndices.subarray(edgeStart, edgeEnd);
-    if (edgeSlice.length > 0) params2.edgeIndices = edgeSlice;
-    const colStart = eachGeometryColorsBase[geometryIdx];
-    const colEnd = atLastGeometry ? colors.length : eachGeometryColorsBase[geometryIdx + 1];
-    const colSlice = colors.subarray(colStart, colEnd);
-    if (colSlice.length > 0) params2.colorsCompressed = colSlice;
-    const normalsBaseI = eachGeometryNormalsBase[geometryIdx];
-    if (!ignoreNormals && normalsBaseI !== NO_INDEX2) {
-      const normalsEnd = nextNonSentinelBase2(eachGeometryNormalsBase, geometryIdx, normals.length);
-      params2.normalsCompressed = normals.subarray(normalsBaseI, normalsEnd);
-    }
-    const uvsBaseI = eachGeometryUVsBase[geometryIdx];
-    if (!ignoreUVs && uvsBaseI !== NO_INDEX2) {
-      const uvsEnd = nextNonSentinelBase2(eachGeometryUVsBase, geometryIdx, uvs.length);
-      params2.uvsCompressed = uvs.subarray(uvsBaseI, uvsEnd);
-    }
-    if (!ignoreUVs && eachGeometryExtraTexCoord && eachGeometryExtraTexCoord.length > 0) {
-      const texCoordsCompressed = {};
-      if (params2.uvsCompressed) {
-        texCoordsCompressed[0] = params2.uvsCompressed;
-      }
-      const vertexTexCoordLength = params2.positionsCompressed.length / 3 * 2;
-      for (let record = 0; record < eachGeometryExtraTexCoord.length; record += 3) {
-        if (eachGeometryExtraTexCoord[record] !== geometryIdx) {
-          continue;
-        }
-        const channel = eachGeometryExtraTexCoord[record + 1];
-        const base = eachGeometryExtraTexCoord[record + 2];
-        texCoordsCompressed[channel] = extraTexCoords.subarray(base, base + vertexTexCoordLength);
-      }
-      if (Object.keys(texCoordsCompressed).length > 0) {
-        params2.texCoordsCompressed = texCoordsCompressed;
-      }
-    }
-    const scalesBaseI = eachGeometryScalesBase[geometryIdx];
-    if (scalesBaseI !== NO_INDEX2) {
-      const scalesEnd = nextNonSentinelBase2(eachGeometryScalesBase, geometryIdx, scales.length);
-      params2.scales = scales.subarray(scalesBaseI, scalesEnd);
-    }
-    const rotationsBaseI = eachGeometryRotationsBase[geometryIdx];
-    if (rotationsBaseI !== NO_INDEX2) {
-      const rotationsEnd = nextNonSentinelBase2(eachGeometryRotationsBase, geometryIdx, rotations.length);
-      const decoded = new Float32Array(rotationsEnd - rotationsBaseI);
-      for (let i = 0; i < decoded.length; i++) {
-        decoded[i] = (rotations[rotationsBaseI + i] - 128) / 128;
-      }
-      params2.rotations = decoded;
-    }
-    const framesBaseI = eachGeometryFramesBase?.[geometryIdx] ?? NO_INDEX2;
-    if (framesBaseI !== NO_INDEX2) {
-      const framesEnd = framesBaseI + (eachGeometryFramesCount?.[geometryIdx] ?? 0);
-      const framesCompressed = [];
-      for (let frameIdx = framesBaseI; frameIdx < framesEnd; frameIdx++) {
-        const framePositionsStart = eachFramePositionsBase[frameIdx];
-        const framePositionsEnd = nextNonSentinelBase2(eachFramePositionsBase, frameIdx, framePositions.length);
-        const frameAABBStart = eachFrameAABBBase[frameIdx];
-        const frame = {
-          time: frameTimes[frameIdx],
-          aabb: frameAABBs.subarray(frameAABBStart, frameAABBStart + 6),
-          positionsCompressed: framePositions.subarray(framePositionsStart, framePositionsEnd)
-        };
-        const frameNormalsStart = eachFrameNormalsBase[frameIdx];
-        if (!ignoreNormals && frameNormalsStart !== NO_INDEX2) {
-          const frameNormalsEnd = nextNonSentinelBase2(eachFrameNormalsBase, frameIdx, frameNormals.length);
-          frame.normalsCompressed = frameNormals.subarray(frameNormalsStart, frameNormalsEnd);
-        }
-        restoreFrameExtras(frame, frameIdx, xgfData, ignoreUVs);
-        framesCompressed.push(frame);
-      }
-      if (framesCompressed.length > 0) {
-        params2.framesCompressed = framesCompressed;
-      }
-    }
-    const vertexStatesBaseI = eachGeometryVertexStatesBase?.[geometryIdx] ?? NO_INDEX2;
-    if (vertexStatesBaseI !== NO_INDEX2) {
-      const vertexStatesEnd = vertexStatesBaseI + (eachGeometryVertexStatesCount?.[geometryIdx] ?? 0);
-      const vertexStatesCompressed = [];
-      for (let stateIdx = vertexStatesBaseI; stateIdx < vertexStatesEnd; stateIdx++) {
-        const statePositionsStart = eachFramePositionsBase[stateIdx];
-        const statePositionsEnd = nextNonSentinelBase2(eachFramePositionsBase, stateIdx, framePositions.length);
-        const stateAABBStart = eachFrameAABBBase[stateIdx];
-        const state = {
-          aabb: frameAABBs.subarray(stateAABBStart, stateAABBStart + 6),
-          positionsCompressed: framePositions.subarray(statePositionsStart, statePositionsEnd)
-        };
-        const stateNormalsStart = eachFrameNormalsBase[stateIdx];
-        if (!ignoreNormals && stateNormalsStart !== NO_INDEX2) {
-          const stateNormalsEnd = nextNonSentinelBase2(eachFrameNormalsBase, stateIdx, frameNormals.length);
-          state.normalsCompressed = frameNormals.subarray(stateNormalsStart, stateNormalsEnd);
-        }
-        restoreFrameExtras(state, stateIdx, xgfData, ignoreUVs);
-        vertexStatesCompressed.push(state);
-      }
-      if (vertexStatesCompressed.length > 0) {
-        params2.vertexStatesCompressed = vertexStatesCompressed;
-      }
-    }
-    const morphTargetsBaseI = eachGeometryMorphTargetsBase?.[geometryIdx] ?? NO_INDEX2;
-    if (morphTargetsBaseI !== NO_INDEX2) {
-      const morphTargetsEnd = nextNonSentinelBase2(eachGeometryMorphTargetsBase, geometryIdx, eachMorphTargetPositionsBase.length);
-      const morphTargets = [];
-      const vertexPositionLength = params2.positionsCompressed.length;
-      for (let targetIdx = morphTargetsBaseI; targetIdx < morphTargetsEnd; targetIdx++) {
-        const targetPositionsStart = eachMorphTargetPositionsBase[targetIdx];
-        const target = {};
-        if (targetPositionsStart !== NO_INDEX2) {
-          target.positions = morphTargetPositions.subarray(targetPositionsStart, targetPositionsStart + vertexPositionLength);
-        }
-        const id = eachMorphTargetId?.[targetIdx] || "";
-        const name14 = eachMorphTargetName?.[targetIdx] || "";
-        if (id) target.id = id;
-        if (name14) target.name = name14;
-        const targetNormalsStart = eachMorphTargetNormalsBase[targetIdx];
-        if (!ignoreNormals && targetNormalsStart !== NO_INDEX2) {
-          target.normals = morphTargetNormals.subarray(targetNormalsStart, targetNormalsStart + vertexPositionLength);
-        }
-        const uvStart = xgfData.eachMorphTargetUVsBase?.[targetIdx] ?? NO_INDEX2;
-        if (!ignoreUVs && uvStart !== NO_INDEX2) {
-          target.uvs = xgfData.morphTargetUVs.subarray(uvStart, uvStart + vertexPositionLength / 3 * 2);
-        }
-        morphTargets.push(target);
-      }
-      if (morphTargets.length > 0) {
-        params2.morphTargets = morphTargets;
-      }
-    }
+    const params2 = readXGFGeometry(xgfData, geometryIdx, geometryId, { ignoreNormals, ignoreUVs });
     const geometryResult = sceneModel.createGeometryCompressed(params2);
     if (geometryResult && geometryResult.ok === false) {
       fail2(geometryResult.error, geometryResult.type);
@@ -112109,8 +114394,10 @@ async function xgfToModel2(params) {
       const meshId = storedMeshId ? prefixMeshId(storedMeshId) : meshIdPrefix ? `${meshIdPrefix}${meshIdx}` : `${nextMeshId++}`;
       if (sceneModel) {
         const geometryIdx = eachMeshGeometriesBase[meshIdx];
-        const hasLocalGeometry = geometryIdx !== NO_INDEX2 && geometryIdx < numGeometries;
-        const geometryId = prefixId(eachMeshGeometryId?.[meshIdx] || (hasLocalGeometry ? eachGeometryId?.[geometryIdx] || `${geometryIdx}` : ""));
+        const hasLocalGeometry = geometryIdx !== NO_INDEX3 && geometryIdx < numGeometries;
+        const geometryId = prefixId(
+          eachMeshGeometryId?.[meshIdx] || (hasLocalGeometry ? eachGeometryId?.[geometryIdx] || `${geometryIdx}` : "")
+        );
         if (!geometryId) {
           fail2(`[xgf] Mesh ${meshIdx} has no geometry reference`);
           return;
@@ -112126,7 +114413,12 @@ async function xgfToModel2(params) {
         const matricesBase = eachMeshMatricesBase[meshIdx];
         const parentTransformId = eachMeshParentTransformId?.[meshIdx] || "";
         const matrix = transformMatrix(matrices.subarray(matricesBase, matricesBase + 16), !parentTransformId);
-        const meshParams = { id: meshId, geometryId, matrix };
+        const meshParams = {
+          id: meshId,
+          geometryId,
+          matrix,
+          source: options.sourceMappings?.meshes?.[storedMeshId]
+        };
         if (options?.clipBindings?.[storedMeshId]) meshParams.clipBoxId = prefixId(options.clipBindings[storedMeshId]);
         if (xgfData.eachMeshBillboard?.[meshIdx] === 1) meshParams.billboard = "spherical";
         if (xgfData.eachMeshBin?.[meshIdx]) meshParams.bin = xgfData.eachMeshBin[meshIdx];
@@ -112137,8 +114429,8 @@ async function xgfToModel2(params) {
         if (eachMeshFrameTime && meshIdx < eachMeshFrameTime.length && eachMeshFrameTime[meshIdx] !== 0) {
           meshParams.frameTime = eachMeshFrameTime[meshIdx];
         }
-        const morphWeightsBaseI = eachMeshMorphWeightsBase?.[meshIdx] ?? NO_INDEX2;
-        if (morphWeightsBaseI !== NO_INDEX2) {
+        const morphWeightsBaseI = eachMeshMorphWeightsBase?.[meshIdx] ?? NO_INDEX3;
+        if (morphWeightsBaseI !== NO_INDEX3) {
           const morphWeightsEnd = nextNonSentinelBase2(eachMeshMorphWeightsBase, meshIdx, morphWeights.length);
           meshParams.morphWeights = Array.from(morphWeights.subarray(morphWeightsBaseI, morphWeightsEnd));
         }
@@ -112171,7 +114463,12 @@ async function xgfToModel2(params) {
     }
     if (meshIds.length > 0) {
       if (sceneModel) {
-        const objectResult = sceneModel.createObject({ id: objectId, meshIds, layerId });
+        const objectResult = sceneModel.createObject({
+          id: objectId,
+          meshIds,
+          layerId,
+          source: options.sourceMappings?.objects?.[eachObjectId[objectIdx]]
+        });
         if (objectResult && objectResult.ok === false) {
           fail2(objectResult.error, objectResult.type);
           return;
@@ -112206,18 +114503,11 @@ async function xgfToModel2(params) {
     if (result.ok === false) fail2(result.error, result.type);
     else if (createdIds) {
       createdIds.dataObjects?.push(...metadata.objects.map((object) => object.id));
-      createdIds.referencedDataObjects?.push(.../* @__PURE__ */ new Set([defaultId, ...metadata.relationships.map((relation) => relation.relatedObjectId)]));
+      createdIds.referencedDataObjects?.push(
+        .../* @__PURE__ */ new Set([defaultId, ...metadata.relationships.map((relation) => relation.relatedObjectId)])
+      );
       createdIds.dataRelationships?.push(...dataModel.relationships.slice(relationshipStart));
     }
-  }
-}
-function restoreFrameExtras(frame, index, data, ignoreUVs) {
-  if (data.eachFrameId?.[index]) frame.id = data.eachFrameId[index];
-  if (data.eachFrameName?.[index]) frame.name = data.eachFrameName[index];
-  const base = data.eachFrameUVsBase?.[index] ?? NO_INDEX2;
-  if (!ignoreUVs && base !== NO_INDEX2) {
-    const end = nextNonSentinelBase2(data.eachFrameUVsBase, index, data.frameUVs.length);
-    frame.uvsCompressed = data.frameUVs.subarray(base, end);
   }
 }
 function restoreAnimationsFromXGF(sceneModel, animationParamsJson, prefixId, prefixMeshId, fail2, createdIds) {
@@ -112268,12 +114558,6 @@ function prefixAnimationParams(params, prefixId, prefixMeshId) {
       };
     })
   };
-}
-function nextNonSentinelBase2(bases, startIdx, arrayLength) {
-  for (let i = startIdx + 1; i < bases.length; i++) {
-    if (bases[i] !== NO_INDEX2) return bases[i];
-  }
-  return arrayLength;
 }
 function createVariantSetsFromXGF(sceneModel, xgfData, prefixId, fail2, createdIds) {
   const {
@@ -112380,303 +114664,59 @@ function readTextureBindingSlot(params, prefix, materialBase, slot, texCoords, t
   }
 }
 
-// ../sdk-oct2/src/formats/xgf/versions/v2/unpackXGF.ts
-function unpackXGF2(arrayBuffer) {
-  const header = new DataView(arrayBuffer);
-  if (header.byteLength < 12 || header.getUint32(0, true) !== 2) {
-    throw new Error("Invalid XGF2 header");
-  }
-  const firstArrayOffset = header.getUint32(4, true);
-  if (firstArrayOffset < 4 + 41 * 8 || (firstArrayOffset - 4) % 8 !== 0 || firstArrayOffset > arrayBuffer.byteLength) {
-    throw new Error("Invalid XGF2 array directory");
-  }
-  const arrayCount = (firstArrayOffset - 4) / 8;
-  const legacyFrameLayout = arrayCount === 67;
-  let previousEnd = firstArrayOffset;
-  for (let i = 0; i < arrayCount; i++) {
-    const offset = header.getUint32(4 + i * 8, true);
-    const length2 = header.getUint32(8 + i * 8, true);
-    if (offset < previousEnd || offset + length2 > arrayBuffer.byteLength) {
-      throw new Error(`Invalid XGF2 array range at ${i}`);
-    }
-    previousEnd = offset + length2;
-  }
-  const requiresSwapFromLittleEndian = (function() {
-    const b2 = new ArrayBuffer(2);
-    new Uint16Array(b2)[0] = 1;
-    return new Uint8Array(b2)[0] !== 1;
-  })();
-  const nextArray = (function() {
-    let i = 0;
-    const dataView = new DataView(arrayBuffer);
-    return function(type) {
-      if (i >= arrayCount) {
-        return new type(0);
-      }
-      const idx = 1 + 2 * i++;
-      const byteOffset = dataView.getUint32(idx * 4, true);
-      const byteLength = dataView.getUint32((idx + 1) * 4, true);
-      const BPE = type.BYTES_PER_ELEMENT;
-      if (byteOffset % BPE || byteLength % BPE) {
-        throw new Error(`Invalid XGF2 array alignment at ${i - 1}`);
-      }
-      if (requiresSwapFromLittleEndian && BPE > 1) {
-        const subarray = new Uint8Array(arrayBuffer, byteOffset, byteLength);
-        const swaps = BPE / 2;
-        const cnt = subarray.length / BPE;
-        for (let b2 = 0; b2 < cnt; b2++) {
-          const offset = b2 * BPE;
-          for (let j = 0; j < swaps; j++) {
-            const i1 = offset + j;
-            const i2 = offset - j + BPE - 1;
-            const tmp = subarray[i1];
-            subarray[i1] = subarray[i2];
-            subarray[i2] = tmp;
-          }
-        }
-      }
-      return new type(arrayBuffer, byteOffset, byteLength / BPE);
-    };
-  })();
-  const nextStringRefs = (function() {
-    const decoder = new TextDecoder();
-    return () => {
-      const bytes = nextArray(Uint8Array);
-      if (bytes.byteLength === 0) {
-        return [];
-      }
-      if (bytes[0] === 91 || bytes[0] === 123) {
-        try {
-          const values3 = JSON.parse(decoder.decode(bytes));
-          if (Array.isArray(values3) && values3.every((value) => typeof value === "string")) {
-            return values3;
-          }
-        } catch (_error) {
-        }
-      }
-      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      if (bytes.byteLength < 16) throw new Error("Invalid XGF2 string table header");
-      const numStrings = view.getUint32(0, true);
-      const numValues = view.getUint32(4, true);
-      const stringBytesLength = view.getUint32(8, true);
-      const offsetsByteOffset = 12;
-      const indicesByteOffset = offsetsByteOffset + (numStrings + 1) * 4;
-      const stringBytesOffset = indicesByteOffset + numValues * 4;
-      if (stringBytesOffset + stringBytesLength !== bytes.byteLength) {
-        throw new Error("Invalid XGF2 string table bounds");
-      }
-      let previousOffset = 0;
-      for (let i = 0; i <= numStrings; i++) {
-        const offset = view.getUint32(offsetsByteOffset + i * 4, true);
-        if (i === 0 && offset !== 0 || offset < previousOffset || offset > stringBytesLength) {
-          throw new Error("Invalid XGF2 string offset");
-        }
-        previousOffset = offset;
-      }
-      if (previousOffset !== stringBytesLength) throw new Error("Invalid XGF2 string data length");
-      for (let i = 0; i < numValues; i++) {
-        if (view.getUint32(indicesByteOffset + i * 4, true) >= numStrings) {
-          throw new Error("Invalid XGF2 string index");
-        }
-      }
-      const strings2 = [];
-      for (let i = 0; i < numStrings; i++) {
-        const start = view.getUint32(offsetsByteOffset + i * 4, true);
-        const end = view.getUint32(offsetsByteOffset + (i + 1) * 4, true);
-        strings2.push(decoder.decode(bytes.subarray(stringBytesOffset + start, stringBytesOffset + end)));
-      }
-      const values2 = new Array(numValues);
-      for (let i = 0; i < numValues; i++) {
-        const index = view.getUint32(indicesByteOffset + i * 4, true);
-        values2[i] = strings2[index] || "";
-      }
-      if (stringBytesLength === 0 && numStrings > 0) {
-        return values2;
-      }
-      return values2;
-    };
-  })();
-  const nextIndexArray = (indexSize2) => indexSize2[0] === 2 ? nextArray(Uint16Array) : nextArray(Uint32Array);
-  const positions = nextArray(Uint16Array);
-  const colors = nextArray(Uint8Array);
-  const indexSize = nextArray(Uint8Array);
-  const indices = nextIndexArray(indexSize);
-  const edgeIndexSize = nextArray(Uint8Array);
-  const edgeIndices = nextIndexArray(edgeIndexSize);
-  const data = {
-    positions,
-    colors,
-    indexSize,
-    indices,
-    edgeIndexSize,
-    edgeIndices,
-    aabbs: nextArray(Float32Array),
-    normals: nextArray(Uint16Array),
-    uvs: nextArray(Float32Array),
-    scales: nextArray(Float32Array),
-    rotations: nextArray(Uint8Array),
-    eachGeometryPositionsBase: nextArray(Uint32Array),
-    eachGeometryColorsBase: nextArray(Uint32Array),
-    eachGeometryIndicesBase: nextArray(Uint32Array),
-    eachGeometryEdgeIndicesBase: nextArray(Uint32Array),
-    eachGeometryNormalsBase: nextArray(Uint32Array),
-    eachGeometryUVsBase: nextArray(Uint32Array),
-    eachGeometryScalesBase: nextArray(Uint32Array),
-    eachGeometryRotationsBase: nextArray(Uint32Array),
-    eachGeometryPrimitiveType: nextArray(Uint8Array),
-    eachGeometryAABBBase: nextArray(Uint32Array),
-    matrices: nextArray(Float64Array),
-    textureData: nextArray(Uint8Array),
-    eachTextureDataBase: nextArray(Uint32Array),
-    eachTextureMediaType: nextArray(Uint8Array),
-    eachTextureWidth: nextArray(Uint16Array),
-    eachTextureHeight: nextArray(Uint16Array),
-    eachTextureSampler: nextArray(Uint8Array),
-    eachTextureEncoding: nextArray(Uint16Array),
-    eachTextureId: nextStringRefs(),
-    eachMaterialPBR: nextArray(Uint8Array),
-    eachMaterialColor: nextArray(Float32Array),
-    eachMaterialTextures: nextArray(Int32Array),
-    eachMaterialId: nextStringRefs(),
-    eachMaterialTriplanarScale: nextArray(Float32Array),
-    eachMeshGeometriesBase: nextArray(Uint32Array),
-    eachMeshMatricesBase: nextArray(Uint32Array),
-    eachMeshMaterialAttributes: nextArray(Uint8Array),
-    eachMeshMaterial: nextArray(Int32Array),
-    eachObjectId: nextStringRefs(),
-    eachObjectMeshesBase: nextArray(Uint32Array),
-    eachGeometryId: nextStringRefs(),
-    eachMeshGeometryId: nextStringRefs(),
-    eachMeshMaterialId: nextStringRefs(),
-    eachTransformId: nextStringRefs(),
-    eachTransformParentId: nextStringRefs(),
-    eachTransformMatricesBase: nextArray(Uint32Array),
-    eachMeshParentTransformId: nextStringRefs(),
-    eachMeshId: legacyFrameLayout ? [] : nextStringRefs(),
-    eachVariantSetId: nextStringRefs(),
-    eachVariantSetDefaultVariantId: nextStringRefs(),
-    eachVariantSetSelectionStrategy: nextArray(Uint8Array),
-    eachVariantSetHysteresisPixels: nextArray(Float32Array),
-    eachVariantSetVariantsBase: nextArray(Uint32Array),
-    eachVariantId: nextStringRefs(),
-    eachVariantRangeMinPixels: nextArray(Float32Array),
-    eachVariantRangeMaxPixels: nextArray(Float32Array),
-    eachVariantObjectIdsBase: nextArray(Uint32Array),
-    variantObjectIds: nextStringRefs(),
-    framePositions: nextArray(Uint16Array),
-    frameNormals: nextArray(Uint16Array),
-    frameAABBs: nextArray(Float32Array),
-    frameTimes: nextArray(Float32Array),
-    eachGeometryFramesBase: nextArray(Uint32Array),
-    eachGeometryFramesCount: legacyFrameLayout ? new Uint32Array(0) : nextArray(Uint32Array),
-    eachGeometryVertexStatesBase: legacyFrameLayout ? new Uint32Array(0) : nextArray(Uint32Array),
-    eachGeometryVertexStatesCount: legacyFrameLayout ? new Uint32Array(0) : nextArray(Uint32Array),
-    eachFramePositionsBase: nextArray(Uint32Array),
-    eachFrameNormalsBase: nextArray(Uint32Array),
-    eachFrameAABBBase: nextArray(Uint32Array),
-    eachMeshFrameTime: nextArray(Float32Array),
-    eachMaterialOptical: nextArray(Float32Array),
-    eachMaterialIor: nextArray(Float32Array),
-    extraTexCoords: nextArray(Float32Array),
-    eachGeometryExtraTexCoord: nextArray(Uint32Array),
-    eachMaterialTextureTexCoord: nextArray(Uint16Array),
-    eachMaterialTextureTransforms: nextArray(Float32Array),
-    morphTargetPositions: nextArray(Float32Array),
-    morphTargetNormals: nextArray(Float32Array),
-    eachGeometryMorphTargetsBase: nextArray(Uint32Array),
-    eachMorphTargetPositionsBase: nextArray(Uint32Array),
-    eachMorphTargetNormalsBase: nextArray(Uint32Array),
-    eachMorphTargetId: nextStringRefs(),
-    eachMorphTargetName: nextStringRefs(),
-    morphWeights: nextArray(Float32Array),
-    eachMeshMorphWeightsBase: nextArray(Uint32Array),
-    animationParamsJson: nextStringRefs(),
-    morphTargetUVs: nextArray(Float32Array),
-    eachMorphTargetUVsBase: nextArray(Uint32Array),
-    eachMaterialEmissionAndCoat: nextArray(Float32Array),
-    eachMeshBillboard: nextArray(Uint8Array),
-    eachMeshBin: nextStringRefs(),
-    frameUVs: nextArray(Float32Array),
-    eachFrameUVsBase: nextArray(Uint32Array),
-    eachFrameId: nextStringRefs(),
-    eachFrameName: nextStringRefs()
-  };
-  if (legacyFrameLayout) {
-    data.eachGeometryFramesCount = inferLegacyFrameCounts(data.eachGeometryFramesBase, data.frameTimes.length);
-  }
-  validateRecordRanges(
-    data.eachGeometryFramesBase,
-    data.eachGeometryFramesCount,
-    Math.min(data.eachFramePositionsBase.length, data.eachFrameNormalsBase.length, data.eachFrameAABBBase.length, data.frameTimes.length),
-    "frames"
-  );
-  validateRecordRanges(
-    data.eachGeometryVertexStatesBase,
-    data.eachGeometryVertexStatesCount,
-    Math.min(data.eachFramePositionsBase.length, data.eachFrameNormalsBase.length, data.eachFrameAABBBase.length),
-    "vertex states"
-  );
-  validateBases(data.eachObjectMeshesBase, data.eachMeshGeometriesBase.length, "object meshes");
-  validateBases(data.eachVariantSetVariantsBase, data.eachVariantId.length, "variants");
-  validateBases(data.eachVariantObjectIdsBase, data.variantObjectIds.length, "variant objects");
-  return data;
-}
-function inferLegacyFrameCounts(bases, frameCount) {
-  const counts = new Uint32Array(bases.length);
-  let end = frameCount;
-  for (let i = bases.length - 1; i >= 0; i--) {
-    const base = bases[i];
-    if (base === 4294967295) continue;
-    if (base > end) throw new Error(`Invalid XGF2 legacy frames range at ${i}`);
-    counts[i] = end - base;
-    end = base;
-  }
-  return counts;
-}
-function validateRecordRanges(bases, counts, available, name14) {
-  if (bases.length !== counts.length) throw new Error(`Invalid XGF2 ${name14} table lengths`);
-  for (let i = 0; i < bases.length; i++) {
-    if (bases[i] === 4294967295 ? counts[i] !== 0 : bases[i] + counts[i] > available) {
-      throw new Error(`Invalid XGF2 ${name14} range at ${i}`);
-    }
-  }
-}
-function validateBases(bases, available, name14) {
-  let previous = 0;
-  for (const base of bases) {
-    if (base < previous || base > available) throw new Error(`Invalid XGF2 ${name14} range`);
-    previous = base;
-  }
-}
-
 // ../sdk-oct2/src/formats/xgf/versions/v2/parse.ts
 async function parse6(params, options) {
   const { fileData, sceneModel, dataModel } = params;
   await xgfToModel2({
-    xgfData: unpackXGF2(fileData),
+    xgfData: unpackXGF(fileData),
     sceneModel,
     dataModel,
     options
   });
 }
 
+// ../sdk-oct2/src/formats/xgf/versions/v3/bindXGFExternalAssets.ts
+function bindXGFExternalAssets(model, declarations, lease, prefix) {
+  const bindings = [];
+  const materialTextures2 = /* @__PURE__ */ Object.create(null);
+  const release = () => {
+    for (const { kind, id, asset } of bindings.splice(0)) model.scene.assets.unbind(model, kind, id, asset);
+  };
+  const bind = (kind, id, index) => {
+    const asset = lease.get(declarations.references[index]);
+    if (!asset || asset.destroyed) throw new Error(`Resolved ${kind} '${id}' is no longer available`);
+    const existing = model[kind][id];
+    unwrapSDKResult(model.scene.assets.bind(model, kind, id, asset));
+    if (!existing) bindings.push({ kind, id, asset });
+  };
+  try {
+    for (const kind of ["geometries", "materials", "textures"]) {
+      for (const [id, index] of Object.entries(declarations[kind])) bind(kind, `${prefix}${id}`, index);
+    }
+    for (const [materialId, slots] of Object.entries(declarations.materialTextures)) {
+      const result = /* @__PURE__ */ Object.create(null);
+      for (const [slot, index] of Object.entries(slots)) {
+        const id = `${prefix}external-texture:${index}:${globalThis.crypto.randomUUID()}`;
+        bind("textures", id, index);
+        result[slot] = id;
+      }
+      materialTextures2[materialId] = result;
+    }
+    return { materialTextures: materialTextures2, release };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
 // ../sdk-oct2/src/formats/xgf/versions/v3/parse.ts
 async function parse7(params, options = {}) {
   const { fileData: buffer, sceneModel, dataModel } = params;
-  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 24) throw new Error("Truncated XGF3 header");
-  const header = new DataView(buffer);
-  const [version2, jsonLength, geometryOffset, geometryLength, resourcesOffset, resourcesLength] = Array.from(
-    { length: 6 },
-    (_, i) => header.getUint32(i * 4, true)
-  );
-  if (version2 !== 3 || jsonLength > 16 * 1024 * 1024 || geometryOffset < 24 + jsonLength || geometryOffset % 8 || geometryLength < 12 || resourcesOffset < geometryOffset + geometryLength || resourcesOffset % 8 || resourcesOffset + resourcesLength !== buffer.byteLength)
-    throw new Error("Invalid XGF3 section bounds");
-  const metadata = JSON.parse(
-    new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(buffer, 24, jsonLength))
-  );
-  if (metadata.schema !== 2 && metadata.schema !== 3 || !Array.isArray(metadata.resources) || !Array.isArray(metadata.representations) || !metadata.bindings || typeof metadata.bindings !== "object" || Array.isArray(metadata.bindings))
+  const { header, metadata, geometryOffset, geometryLength, resourcesOffset, resourcesLength } = readXGFEnvelope(buffer);
+  if (![2, 3, 4].includes(metadata.schema) || !Array.isArray(metadata.resources) || !Array.isArray(metadata.representations) || !metadata.bindings || typeof metadata.bindings !== "object" || Array.isArray(metadata.bindings))
     throw new Error("Invalid XGF3 declarations");
-  if (metadata.schema === 3 && (!Array.isArray(metadata.clipBoxes) || !metadata.clipBindings || typeof metadata.clipBindings !== "object" || Array.isArray(metadata.clipBindings))) throw new Error("Invalid XGF3 clip declarations");
+  if (metadata.schema === 3 && (!Array.isArray(metadata.clipBoxes) || !metadata.clipBindings || typeof metadata.clipBindings !== "object" || Array.isArray(metadata.clipBindings)))
+    throw new Error("Invalid XGF3 clip declarations");
   if (metadata.lights !== void 0 && !Array.isArray(metadata.lights)) throw new Error("Invalid XGF3 lights");
   const lightIds = /* @__PURE__ */ new Set();
   for (const light of metadata.lights ?? []) {
@@ -112695,6 +114735,20 @@ async function parse7(params, options = {}) {
   for (const id of Object.values(metadata.clipBindings ?? {})) {
     if (typeof id !== "string" || !clipIds.has(id)) throw new Error("XGF3 clip binding references a missing box");
   }
+  if (metadata.sourceMappings !== void 0) {
+    if (!metadata.sourceMappings || typeof metadata.sourceMappings !== "object" || Array.isArray(metadata.sourceMappings))
+      throw new Error("Invalid XGF3 source mappings");
+    for (const [kind, mappings] of Object.entries(metadata.sourceMappings)) {
+      if (!["meshes", "objects", "transforms"].includes(kind) || !mappings || typeof mappings !== "object" || Array.isArray(mappings))
+        throw new Error("Invalid XGF3 source mapping group");
+      for (const [id, source] of Object.entries(mappings)) {
+        if (!id || !source || typeof source !== "object" || [source.documentId, source.componentId].some(
+          (part) => typeof part !== "string" || !part || part.length > 2048
+        ) || source.revision !== void 0 && (typeof source.revision !== "string" || !source.revision || source.revision.length > 2048))
+          throw new Error("Invalid XGF3 source identity");
+      }
+    }
+  }
   const prefix = (id) => `${options.idPrefix ?? ""}${id}`;
   const seen = /* @__PURE__ */ new Set();
   let lastEnd = 0;
@@ -112708,8 +114762,7 @@ async function parse7(params, options = {}) {
     lastEnd = byteOffset + byteLength;
     const component = entry.kind === "texture2d" ? entry.format === "rgba8unorm" ? "uint8" : "float32" : entry.componentType;
     const Type = { float32: Float32Array, uint32: Uint32Array, uint8: Uint8Array }[component];
-    if (!Type || byteLength % Type.BYTES_PER_ELEMENT)
-      throw new Error("Invalid XGF3 component type or alignment");
+    if (!Type || byteLength % Type.BYTES_PER_ELEMENT) throw new Error("Invalid XGF3 component type or alignment");
     const data = new Type(byteLength / Type.BYTES_PER_ELEMENT);
     for (let i = 0; i < data.length; i++) {
       const offset = resourcesOffset + byteOffset + i * Type.BYTES_PER_ELEMENT;
@@ -112733,21 +114786,28 @@ async function parse7(params, options = {}) {
   const bindings = /* @__PURE__ */ Object.create(null);
   for (const [meshId, value] of Object.entries(metadata.bindings)) {
     const binding = value;
-    if (!meshId || !binding || typeof binding.representationId !== "string" || !binding.representationId || binding.mode !== "replace" && binding.mode !== "augment") throw new Error("Invalid XGF3 representation binding");
+    if (!meshId || !binding || typeof binding.representationId !== "string" || !binding.representationId || binding.mode !== "replace" && binding.mode !== "augment")
+      throw new Error("Invalid XGF3 representation binding");
     bindings[meshId] = { representationId: prefix(binding.representationId), mode: binding.mode };
   }
   const geometryBytes = buffer.slice(geometryOffset, geometryOffset + geometryLength);
   if (new DataView(geometryBytes).getUint32(0, true) !== 2) throw new Error("Invalid XGF3 geometry section");
-  const geometry = unpackXGF2(geometryBytes);
+  const geometry = unpackXGF(geometryBytes);
   const storedIds = new Set(geometry.eachMeshId);
   if ([...Object.keys(bindings), ...Object.keys(metadata.clipBindings ?? {})].some((id) => !storedIds.has(id)))
     throw new Error("XGF3 binding references a missing mesh");
+  const external = metadata.schema === 4 ? validateXGFExternalAssets(metadata.externalAssets, geometry, options.assetLimits?.maxReferences) : void 0;
+  if (external && sceneModel && !options._externalAssets)
+    throw new Error("External XGF assets must be prepared before mutation");
+  let externalBindings;
   const ownsBatch = !!sceneModel && !sceneModel.activeBatch;
   if (ownsBatch) {
     const result = sceneModel.beginBatch({ id: "xgf3-load" });
     if (result.ok === false) throw new SDKOperationError({ ...result, error: result.error });
   }
   try {
+    if (external && sceneModel)
+      externalBindings = bindXGFExternalAssets(sceneModel, external, options._externalAssets, options.idPrefix ?? "");
     if (sceneModel) {
       for (const resource of resources)
         if (sceneModel.dataResources[resource.id]) throw new Error(`Existing resource ${resource.id}`);
@@ -112763,7 +114823,16 @@ async function parse7(params, options = {}) {
         if (result.ok === false) throw new SDKOperationError({ ...result, error: result.error });
       }
     }
-    const createdIds = options.createdIds ?? { geometries: [], textures: [], materials: [], meshes: [], objects: [], transforms: [], animations: [], variantSets: [] };
+    const createdIds = options.createdIds ?? {
+      geometries: [],
+      textures: [],
+      materials: [],
+      meshes: [],
+      objects: [],
+      transforms: [],
+      animations: [],
+      variantSets: []
+    };
     await xgfToModel2({
       xgfData: geometry,
       sceneModel,
@@ -112773,6 +114842,8 @@ async function parse7(params, options = {}) {
         createdIds,
         coordinateSystem: options.coordinateSystem ?? metadata.coordinateSystem,
         representationBindings: bindings,
+        sourceMappings: metadata.sourceMappings,
+        externalMaterialTextures: externalBindings?.materialTextures,
         lights: metadata.lights,
         clipBoxes: metadata.clipBoxes,
         clipBindings: metadata.clipBindings
@@ -112786,24 +114857,46 @@ async function parse7(params, options = {}) {
   } catch (error) {
     if (ownsBatch) sceneModel.rollbackBatch();
     throw error;
+  } finally {
+    externalBindings?.release();
   }
 }
 
 // ../sdk-oct2/src/formats/xgf/XGFLoader.ts
 var XGFLoader = class extends ModelLoader {
+  load(params, options = {}) {
+    return super.load(params, options);
+  }
   constructor() {
     super({
       format: "XGF",
       fileDataType: "arraybuffer",
       parsers: {
-        "1": parse5,
-        "2": parse6,
-        "3": parse7
+        "1": prepare(parse5),
+        "2": prepare(parse6),
+        "3": prepare(parse7)
       },
       getVersion: (fileData) => "" + new DataView(fileData).getUint32(0, true)
     });
   }
 };
+function prepare(parser2) {
+  return async (params, options = {}) => {
+    const model = params.sceneModel;
+    if (!model) return parser2(params, options);
+    const supplied = options._externalAssets;
+    const lease = supplied ?? unwrapSDKResult(await prepareXGFAssets(params.fileData, model.scene, options));
+    try {
+      await mutateXGFScene(model.scene, async () => {
+        options.signal?.throwIfAborted();
+        if (model.destroyed || model.destroying) throw new Error("XGF destination was unloaded before publication");
+        await parser2(params, { ...options, _externalAssets: lease });
+      });
+    } finally {
+      if (!supplied) lease?.release();
+    }
+  };
+}
 
 // ../sdk-oct2/src/formats/xgf/internal/encodeImageToPNGNode.ts
 async function encodeImageToPNGNode(image, width, height, isPixelBuffer) {
@@ -112827,7 +114920,7 @@ async function encodeImageToPNGNode(image, width, height, isPixelBuffer) {
 var NUM_MATERIAL_ATTRIBUTES3 = 4;
 var NUM_MATERIAL_TEXTURE_REFS3 = 5;
 var NUM_MATERIAL_PBR_BYTES3 = 8;
-var NO_INDEX3 = 4294967295;
+var NO_INDEX4 = 4294967295;
 var clampByte = (v) => v < 0 ? 0 : v > 255 ? 255 : v;
 var SAMPLER_CODE = {
   [RepeatWrapping]: 1,
@@ -113109,14 +115202,14 @@ async function modelToXGF(params) {
       xgfData.normals.set(geometry.normalsCompressed, normalsBase);
       normalsBase += geometry.normalsCompressed.length;
     } else {
-      xgfData.eachGeometryNormalsBase[geometryIdx] = NO_INDEX3;
+      xgfData.eachGeometryNormalsBase[geometryIdx] = NO_INDEX4;
     }
     if (!ignoreUVs && geometry.uvsCompressed) {
       xgfData.eachGeometryUVsBase[geometryIdx] = uvsBase;
       xgfData.uvs.set(geometry.uvsCompressed, uvsBase);
       uvsBase += geometry.uvsCompressed.length;
     } else {
-      xgfData.eachGeometryUVsBase[geometryIdx] = NO_INDEX3;
+      xgfData.eachGeometryUVsBase[geometryIdx] = NO_INDEX4;
     }
     if (geometry.scales && geometry.rotations) {
       xgfData.eachGeometryScalesBase[geometryIdx] = scalesBase;
@@ -113129,8 +115222,8 @@ async function modelToXGF(params) {
       }
       rotationsBase += rotations.length;
     } else {
-      xgfData.eachGeometryScalesBase[geometryIdx] = NO_INDEX3;
-      xgfData.eachGeometryRotationsBase[geometryIdx] = NO_INDEX3;
+      xgfData.eachGeometryScalesBase[geometryIdx] = NO_INDEX4;
+      xgfData.eachGeometryRotationsBase[geometryIdx] = NO_INDEX4;
     }
     geometryIndices[geometry.id] = geometryIdx;
   }
@@ -113339,7 +115432,7 @@ async function encode10(params, options) {
 var NUM_MATERIAL_ATTRIBUTES4 = 4;
 var NUM_MATERIAL_TEXTURE_REFS4 = 5;
 var NUM_MATERIAL_PBR_BYTES4 = 8;
-var NO_INDEX4 = 4294967295;
+var NO_INDEX5 = 4294967295;
 var clampByte2 = (v) => v < 0 ? 0 : v > 255 ? 255 : v;
 var SAMPLER_CODE2 = {
   [RepeatWrapping]: 1,
@@ -113396,13 +115489,23 @@ async function modelToXGF2(params) {
   if (options.coordinateSystem) {
     createCoordinateSystemTransform(sceneModel.scene.coordinateSystem, options.coordinateSystem, createMat4Float64());
   }
-  const geometriesList = Object.values(sceneModel.geometries);
+  const selected = new SceneResourceSelection(sceneModel);
+  const geometriesList = assetMode === "referencesOnly" ? [] : selected.geometries.filter((asset) => options.includeAsset?.(asset) !== false);
   const meshesList = Object.values(sceneModel.meshes);
   const objectsList = Object.values(sceneModel.objects);
-  const texturesList = Object.values(sceneModel.textures);
-  const materialsList = Object.values(sceneModel.materials);
+  const texturesList = assetMode === "referencesOnly" ? [] : selected.textures.filter((asset) => options.includeAsset?.(asset) !== false);
+  const materialsList = assetMode === "referencesOnly" ? [] : selected.materials.filter((asset) => options.includeAsset?.(asset) !== false);
   const transformsList = Object.values(sceneModel.transforms);
-  const variantSetPayload = buildVariantSetPayload(sceneModel, assetMode, new Set(objectsList.map((object) => object.id)));
+  if (preserveTransforms && [...meshesList, ...transformsList].some(
+    (instance) => instance.parentTransform && !transformsList.includes(instance.parentTransform)
+  )) {
+    throw new Error("Export contains a parent outside the document; include its frame or explicitly bake transforms");
+  }
+  const variantSetPayload = buildVariantSetPayload(
+    sceneModel,
+    assetMode,
+    new Set(objectsList.map((object) => object.id))
+  );
   const animationParamsJson = assetMode === "assetLibrary" ? [] : collectAnimationParamsJson(sceneModel, {
     includeTransformTargets: preserveTransforms,
     includeMeshTargets: true
@@ -113507,8 +115610,8 @@ async function modelToXGF2(params) {
   for (let i = 0; i < numTextures; i++) {
     if ((i & 3) === 0) await step("Encoding textures", i, numTextures);
     const tex = texturesList[i];
-    textureIds.push(tex.id);
-    textureIndexById[tex.id] = i;
+    textureIds.push(selected.id(tex));
+    textureIndexById[selected.id(tex)] = i;
     let bytes = null;
     let mediaCode = 255;
     if (tex.buffers && tex.buffers.length > 0 && tex.buffers[0]) {
@@ -113570,8 +115673,8 @@ async function modelToXGF2(params) {
     eachMaterialEmissionAndCoat.set(mat.emissiveColor ?? (mat.emissiveTexture ? [1, 1, 1] : [0, 0, 0]), i * 5);
     eachMaterialEmissionAndCoat[i * 5 + 3] = mat.clearcoat ?? 0;
     eachMaterialEmissionAndCoat[i * 5 + 4] = mat.clearcoatRoughness ?? 0;
-    materialIndexById[mat.id] = i;
-    eachMaterialId.push(mat.id);
+    materialIndexById[selected.id(mat)] = i;
+    eachMaterialId.push(selected.id(mat));
     const base = i * NUM_MATERIAL_PBR_BYTES4;
     eachMaterialColor[i * 3] = mat.color[0];
     eachMaterialColor[i * 3 + 1] = mat.color[1];
@@ -113585,17 +115688,67 @@ async function modelToXGF2(params) {
     eachMaterialPBR[base + 6] = clampU82(mat.alphaMode);
     eachMaterialPBR[base + 7] = clampU82(mat.alphaCutoff * 255);
     const tBase = i * NUM_MATERIAL_TEXTURE_REFS4;
-    eachMaterialTextures[tBase] = textureIndexOrNone2(mat.colorTexture?.id, textureIndexById);
-    eachMaterialTextures[tBase + 1] = textureIndexOrNone2(mat.metallicRoughnessTexture?.id, textureIndexById);
-    eachMaterialTextures[tBase + 2] = textureIndexOrNone2(mat.normalsTexture?.id, textureIndexById);
-    eachMaterialTextures[tBase + 3] = textureIndexOrNone2(mat.occlusionTexture?.id, textureIndexById);
-    eachMaterialTextures[tBase + 4] = textureIndexOrNone2(mat.emissiveTexture?.id, textureIndexById);
+    eachMaterialTextures[tBase] = textureIndexOrNone2(
+      mat.colorTexture ? selected.id(mat.colorTexture) : void 0,
+      textureIndexById
+    );
+    eachMaterialTextures[tBase + 1] = textureIndexOrNone2(
+      mat.metallicRoughnessTexture ? selected.id(mat.metallicRoughnessTexture) : void 0,
+      textureIndexById
+    );
+    eachMaterialTextures[tBase + 2] = textureIndexOrNone2(
+      mat.normalsTexture ? selected.id(mat.normalsTexture) : void 0,
+      textureIndexById
+    );
+    eachMaterialTextures[tBase + 3] = textureIndexOrNone2(
+      mat.occlusionTexture ? selected.id(mat.occlusionTexture) : void 0,
+      textureIndexById
+    );
+    eachMaterialTextures[tBase + 4] = textureIndexOrNone2(
+      mat.emissiveTexture ? selected.id(mat.emissiveTexture) : void 0,
+      textureIndexById
+    );
     if (hasMaterialTextureBindingState) {
-      writeTextureBindingState(eachMaterialTextureTexCoord, eachMaterialTextureTransforms, tBase, 0, mat.colorTextureTexCoord, mat.colorTextureUVTransform);
-      writeTextureBindingState(eachMaterialTextureTexCoord, eachMaterialTextureTransforms, tBase, 1, mat.metallicRoughnessTextureTexCoord, mat.metallicRoughnessTextureUVTransform);
-      writeTextureBindingState(eachMaterialTextureTexCoord, eachMaterialTextureTransforms, tBase, 2, mat.normalsTextureTexCoord, mat.normalsTextureUVTransform);
-      writeTextureBindingState(eachMaterialTextureTexCoord, eachMaterialTextureTransforms, tBase, 3, mat.occlusionTextureTexCoord, mat.occlusionTextureUVTransform);
-      writeTextureBindingState(eachMaterialTextureTexCoord, eachMaterialTextureTransforms, tBase, 4, mat.emissiveTextureTexCoord, mat.emissiveTextureUVTransform);
+      writeTextureBindingState(
+        eachMaterialTextureTexCoord,
+        eachMaterialTextureTransforms,
+        tBase,
+        0,
+        mat.colorTextureTexCoord,
+        mat.colorTextureUVTransform
+      );
+      writeTextureBindingState(
+        eachMaterialTextureTexCoord,
+        eachMaterialTextureTransforms,
+        tBase,
+        1,
+        mat.metallicRoughnessTextureTexCoord,
+        mat.metallicRoughnessTextureUVTransform
+      );
+      writeTextureBindingState(
+        eachMaterialTextureTexCoord,
+        eachMaterialTextureTransforms,
+        tBase,
+        2,
+        mat.normalsTextureTexCoord,
+        mat.normalsTextureUVTransform
+      );
+      writeTextureBindingState(
+        eachMaterialTextureTexCoord,
+        eachMaterialTextureTransforms,
+        tBase,
+        3,
+        mat.occlusionTextureTexCoord,
+        mat.occlusionTextureUVTransform
+      );
+      writeTextureBindingState(
+        eachMaterialTextureTexCoord,
+        eachMaterialTextureTransforms,
+        tBase,
+        4,
+        mat.emissiveTextureTexCoord,
+        mat.emissiveTextureUVTransform
+      );
     }
     eachMaterialTriplanarScale[i] = mat.triplanarScale;
     if (hasOpticalMaterials) {
@@ -113660,7 +115813,7 @@ async function modelToXGF2(params) {
     eachMeshBillboard: new Uint8Array(numMeshes),
     eachMeshBin: new Array(numMeshes),
     frameUVs: new Float32Array(sizeFrameUVs),
-    eachFrameUVsBase: new Uint32Array(sizeDeformationStates).fill(NO_INDEX4),
+    eachFrameUVsBase: new Uint32Array(sizeDeformationStates).fill(NO_INDEX5),
     eachFrameId: new Array(sizeDeformationStates),
     eachFrameName: new Array(sizeDeformationStates),
     eachMeshGeometriesBase: new Uint32Array(numMeshes),
@@ -113669,7 +115822,7 @@ async function modelToXGF2(params) {
     eachMeshMaterial: new Int32Array(numMeshes),
     eachObjectId: [],
     eachObjectMeshesBase: new Uint32Array(numObjects),
-    eachGeometryId: geometriesList.map((geometry) => geometry.id),
+    eachGeometryId: geometriesList.map((geometry) => selected.id(geometry)),
     eachMeshGeometryId: new Array(numMeshes),
     eachMeshMaterialId: new Array(numMeshes),
     eachMeshId: preserveMeshIds ? new Array(numMeshes) : [],
@@ -113705,7 +115858,7 @@ async function modelToXGF2(params) {
     eachGeometryMorphTargetsBase: new Uint32Array(numGeometries),
     eachMorphTargetPositionsBase: new Uint32Array(sizeMorphTargets),
     eachMorphTargetNormalsBase: new Uint32Array(sizeMorphTargets),
-    eachMorphTargetUVsBase: new Uint32Array(sizeMorphTargets).fill(NO_INDEX4),
+    eachMorphTargetUVsBase: new Uint32Array(sizeMorphTargets).fill(NO_INDEX5),
     eachMorphTargetId: new Array(sizeMorphTargets),
     eachMorphTargetName: new Array(sizeMorphTargets),
     morphWeights: new Float32Array(sizeMorphWeights),
@@ -113803,14 +115956,14 @@ async function modelToXGF2(params) {
       xgfData.normals.set(geometry.normalsCompressed, normalsBase);
       normalsBase += geometry.normalsCompressed.length;
     } else {
-      xgfData.eachGeometryNormalsBase[geometryIdx] = NO_INDEX4;
+      xgfData.eachGeometryNormalsBase[geometryIdx] = NO_INDEX5;
     }
     if (!ignoreUVs && geometry.uvsCompressed) {
       xgfData.eachGeometryUVsBase[geometryIdx] = uvsBase;
       xgfData.uvs.set(geometry.uvsCompressed, uvsBase);
       uvsBase += geometry.uvsCompressed.length;
     } else {
-      xgfData.eachGeometryUVsBase[geometryIdx] = NO_INDEX4;
+      xgfData.eachGeometryUVsBase[geometryIdx] = NO_INDEX5;
     }
     if (!ignoreUVs && geometry.texCoordsCompressed) {
       for (const key of Object.keys(geometry.texCoordsCompressed)) {
@@ -113838,13 +115991,13 @@ async function modelToXGF2(params) {
       }
       rotationsBase += rotations.length;
     } else {
-      xgfData.eachGeometryScalesBase[geometryIdx] = NO_INDEX4;
-      xgfData.eachGeometryRotationsBase[geometryIdx] = NO_INDEX4;
+      xgfData.eachGeometryScalesBase[geometryIdx] = NO_INDEX5;
+      xgfData.eachGeometryRotationsBase[geometryIdx] = NO_INDEX5;
     }
     if (geometry.framesCompressed && geometry.framesCompressed.length > 0) {
       xgfData.eachGeometryFramesBase[geometryIdx] = framesBase;
       xgfData.eachGeometryFramesCount[geometryIdx] = geometry.framesCompressed.length;
-      xgfData.eachGeometryVertexStatesBase[geometryIdx] = NO_INDEX4;
+      xgfData.eachGeometryVertexStatesBase[geometryIdx] = NO_INDEX5;
       xgfData.eachGeometryVertexStatesCount[geometryIdx] = 0;
       for (const frame of geometry.framesCompressed) {
         xgfData.frameTimes[framesBase] = frame.time;
@@ -113860,12 +116013,12 @@ async function modelToXGF2(params) {
           xgfData.frameNormals.set(frame.normalsCompressed, frameNormalsBase);
           frameNormalsBase += frame.normalsCompressed.length;
         } else {
-          xgfData.eachFrameNormalsBase[framesBase] = NO_INDEX4;
+          xgfData.eachFrameNormalsBase[framesBase] = NO_INDEX5;
         }
         framesBase++;
       }
     } else {
-      xgfData.eachGeometryFramesBase[geometryIdx] = NO_INDEX4;
+      xgfData.eachGeometryFramesBase[geometryIdx] = NO_INDEX5;
       xgfData.eachGeometryFramesCount[geometryIdx] = 0;
       if (geometry.vertexStatesCompressed && geometry.vertexStatesCompressed.length > 0) {
         xgfData.eachGeometryVertexStatesBase[geometryIdx] = framesBase;
@@ -113884,12 +116037,12 @@ async function modelToXGF2(params) {
             xgfData.frameNormals.set(state.normalsCompressed, frameNormalsBase);
             frameNormalsBase += state.normalsCompressed.length;
           } else {
-            xgfData.eachFrameNormalsBase[framesBase] = NO_INDEX4;
+            xgfData.eachFrameNormalsBase[framesBase] = NO_INDEX5;
           }
           framesBase++;
         }
       } else {
-        xgfData.eachGeometryVertexStatesBase[geometryIdx] = NO_INDEX4;
+        xgfData.eachGeometryVertexStatesBase[geometryIdx] = NO_INDEX5;
         xgfData.eachGeometryVertexStatesCount[geometryIdx] = 0;
       }
     }
@@ -113903,14 +116056,14 @@ async function modelToXGF2(params) {
           xgfData.morphTargetPositions.set(target.positions, morphTargetPositionsBase);
           morphTargetPositionsBase += target.positions.length;
         } else {
-          xgfData.eachMorphTargetPositionsBase[morphTargetsBase] = NO_INDEX4;
+          xgfData.eachMorphTargetPositionsBase[morphTargetsBase] = NO_INDEX5;
         }
         if (!ignoreNormals && target.normals) {
           xgfData.eachMorphTargetNormalsBase[morphTargetsBase] = morphTargetNormalsBase;
           xgfData.morphTargetNormals.set(target.normals, morphTargetNormalsBase);
           morphTargetNormalsBase += target.normals.length;
         } else {
-          xgfData.eachMorphTargetNormalsBase[morphTargetsBase] = NO_INDEX4;
+          xgfData.eachMorphTargetNormalsBase[morphTargetsBase] = NO_INDEX5;
         }
         if (!ignoreUVs && target.uvs) {
           xgfData.eachMorphTargetUVsBase[morphTargetsBase] = morphTargetUVsBase;
@@ -113920,9 +116073,9 @@ async function modelToXGF2(params) {
         morphTargetsBase++;
       }
     } else {
-      xgfData.eachGeometryMorphTargetsBase[geometryIdx] = NO_INDEX4;
+      xgfData.eachGeometryMorphTargetsBase[geometryIdx] = NO_INDEX5;
     }
-    geometryIndices[geometry.id] = geometryIdx;
+    geometryIndices[selected.id(geometry)] = geometryIdx;
   }
   let identityMatrixAdded = false;
   let identityMatrixBase = 0;
@@ -113941,13 +116094,13 @@ async function modelToXGF2(params) {
       if (preserveMeshIds) {
         xgfData.eachMeshId[meshesBase] = mesh.id;
       }
-      xgfData.eachMeshGeometriesBase[meshesBase] = geometryIndices[mesh.geometry.id];
-      xgfData.eachMeshGeometryId[meshesBase] = mesh.geometry?.id || "";
-      xgfData.eachMeshMaterialId[meshesBase] = mesh.material?.id || "";
+      xgfData.eachMeshGeometriesBase[meshesBase] = geometryIndices[selected.id(mesh.geometry)] ?? 4294967295;
+      xgfData.eachMeshGeometryId[meshesBase] = selected.id(mesh.geometry);
+      xgfData.eachMeshMaterialId[meshesBase] = mesh.material ? selected.id(mesh.material) : "";
       if (preserveTransforms) {
         xgfData.eachMeshParentTransformId[meshesBase] = mesh.parentTransform?.id || "";
       }
-      const matrix = preserveTransforms ? mesh.matrix : getMeshWorldMatrix(mesh, options.coordinateSystem);
+      const matrix = preserveTransforms ? exportLocalMatrix(mesh, sceneModel) : getMeshWorldMatrix(mesh, options.coordinateSystem);
       if (isIdentityMat4(matrix)) {
         if (!identityMatrixAdded) {
           matrices.push(...matrix);
@@ -113963,7 +116116,7 @@ async function modelToXGF2(params) {
         xgfData.eachMeshMatricesBase[meshesBase] = matricesBase;
         matricesBase += 16;
       }
-      xgfData.eachMeshMaterial[meshesBase] = mesh.material ? materialIndexById[mesh.material.id] ?? -1 : -1;
+      xgfData.eachMeshMaterial[meshesBase] = mesh.material ? materialIndexById[selected.id(mesh.material)] ?? -1 : -1;
       xgfData.eachMeshFrameTime[meshesBase] = mesh.frameTime || 0;
       xgfData.eachMeshBillboard[meshesBase] = mesh.billboard === "spherical" ? 1 : 0;
       xgfData.eachMeshBin[meshesBase] = mesh.bin ?? "";
@@ -113972,7 +116125,7 @@ async function modelToXGF2(params) {
         xgfData.morphWeights.set(mesh.morphWeights, morphWeightsBase);
         morphWeightsBase += mesh.morphWeights.length;
       } else {
-        xgfData.eachMeshMorphWeightsBase[meshesBase] = NO_INDEX4;
+        xgfData.eachMeshMorphWeightsBase[meshesBase] = NO_INDEX5;
       }
       if (!mesh.material) {
         const colorBase = meshesBase * NUM_MATERIAL_ATTRIBUTES4;
@@ -113992,7 +116145,7 @@ async function modelToXGF2(params) {
     for (let i = 0; i < transformsList.length; i++) {
       const transform2 = transformsList[i];
       xgfData.eachTransformMatricesBase[i] = matricesBase;
-      matrices.push(...transform2.matrix);
+      matrices.push(...exportLocalMatrix(transform2, sceneModel));
       matricesBase += 16;
     }
   }
@@ -114002,7 +116155,7 @@ async function modelToXGF2(params) {
     stripInstances(xgfData);
   } else if (assetMode === "referencesOnly") {
     stripAssets(xgfData);
-  } else {
+  } else if (!options.includeAsset) {
     stripExternalMeshRefs(xgfData);
   }
   if (onProgress) {
@@ -114160,7 +116313,9 @@ function toPlainAnimationParams(params) {
   };
 }
 function buildVariantSetPayload(sceneModel, assetMode, objectIdSet) {
-  const variantSets = assetMode === "assetLibrary" ? [] : Object.values(sceneModel.variantSets || {}).filter((variantSet) => variantSetObjectsContained(variantSet, objectIdSet));
+  const variantSets = assetMode === "assetLibrary" ? [] : Object.values(sceneModel.variantSets || {}).filter(
+    (variantSet) => variantSetObjectsContained(variantSet, objectIdSet)
+  );
   const eachVariantSetId = [];
   const eachVariantSetDefaultVariantId = [];
   const eachVariantSetSelectionStrategy = new Uint8Array(variantSets.length);
@@ -114524,22 +116679,96 @@ async function encode11(params, options) {
   return packXGF2(xgfData);
 }
 
+// ../sdk-oct2/src/formats/xgf/versions/v3/exportExternalAssets.ts
+async function exportExternalAssets(model, onWarning) {
+  const selected = new SceneResourceSelection(model);
+  const table = {
+    references: [],
+    geometries: /* @__PURE__ */ Object.create(null),
+    materials: /* @__PURE__ */ Object.create(null),
+    textures: /* @__PURE__ */ Object.create(null),
+    materialTextures: /* @__PURE__ */ Object.create(null)
+  };
+  const indices = /* @__PURE__ */ new Map();
+  const add = async (asset) => {
+    const reference = asset.externalReference;
+    if (!reference) throw new Error("Cannot preserve an asset without library provenance");
+    if (await assetFingerprint(asset) !== model.scene.assets.fingerprint(asset)) {
+      throw new Error(
+        `Library ${reference.kind} '${reference.id}' changed after resolution; clone and publish a new revision`
+      );
+    }
+    const key = sceneAssetReferenceKey(reference);
+    let index = indices.get(key);
+    if (index === void 0) {
+      index = table.references.length;
+      indices.set(key, index);
+      table.references.push(reference);
+      const warning = sceneAssetWarning(reference);
+      if (warning) onWarning?.(warning);
+    }
+    return index;
+  };
+  for (const group of ["geometries", "materials", "textures"]) {
+    for (const asset of selected[group]) {
+      if (asset.externalReference) table[group][selected.id(asset)] = await add(asset);
+    }
+  }
+  for (const material of selected.materials) {
+    if (material.externalReference) continue;
+    for (const slot of sceneMaterialTextureSlots) {
+      const texture = material[slot.slice(0, -2)];
+      if (!texture?.externalReference) continue;
+      const bindings = table.materialTextures[selected.id(material)] ??= /* @__PURE__ */ Object.create(null);
+      bindings[slot] = table.textures[selected.id(texture)];
+    }
+  }
+  return table;
+}
+
 // ../sdk-oct2/src/formats/xgf/versions/v3/encode.ts
 async function encode12(params, options) {
   const model = params.sceneModel;
   if (!model) throw new Error("XGF3 requires a SceneModel");
   if (options?.assetMode && options.assetMode !== "full" && (Object.keys(model.representations ?? {}).length || Object.keys(model.dataResources ?? {}).length))
     throw new Error("XGF3 currently requires a full model payload");
+  if (options?.assets && !["embed", "preserveExternal"].includes(options.assets))
+    throw new Error("Unsupported XGF asset export policy");
+  const sourceMappings = Object.fromEntries(
+    ["meshes", "objects", "transforms"].map((kind) => [
+      kind,
+      Object.fromEntries(
+        Object.values(model[kind]).filter((instance) => instance.source).map((instance) => [instance.id, instance.source])
+      )
+    ])
+  );
+  const hasSources = Object.values(sourceMappings).some((group) => Object.keys(group).length > 0);
+  const externalAssets = options?.assets === "preserveExternal" ? await exportExternalAssets(model, options.onAssetWarning) : void 0;
   const geometry = packXGF2(
-    await modelToXGF2({ sceneModel: model, options: { ...options, preserveMeshIds: true } })
+    await modelToXGF2({
+      sceneModel: model,
+      options: {
+        ...options,
+        preserveMeshIds: true,
+        includeAsset: externalAssets ? (asset) => !asset.externalReference : void 0
+      }
+    })
   );
   const clipBoxes = options?.assetMode === "assetLibrary" ? [] : Object.values(model.clipBoxes ?? {}).map((box) => {
     const result = box.toParams();
     if (result.ok === false) throw new SDKOperationError({ ...result, error: result.error });
     const params2 = result.value;
     if (options?.coordinateSystem || options?.preserveTransforms === false) {
-      const frame = createCoordinateSystemTransform(model.scene.coordinateSystem, options?.coordinateSystem ?? model.coordinateSystem, createMat4Float64());
-      return { ...params2, parentTransformId: void 0, frameMatrix: Array.from(mulMat4(frame, box.worldMatrix, createMat4Float64())) };
+      const frame = createCoordinateSystemTransform(
+        model.scene.coordinateSystem,
+        options?.coordinateSystem ?? model.coordinateSystem,
+        createMat4Float64()
+      );
+      return {
+        ...params2,
+        parentTransformId: void 0,
+        frameMatrix: Array.from(mulMat4(frame, box.worldMatrix, createMat4Float64()))
+      };
     }
     return params2;
   });
@@ -114547,14 +116776,24 @@ async function encode12(params, options) {
     const result = light.toParams();
     if (result.ok === false) throw new SDKOperationError({ ...result, error: result.error });
     if (options?.coordinateSystem || options?.preserveTransforms === false || options?.assetMode === "assetLibrary") {
-      const outputToWorld = createCoordinateSystemTransform(options?.coordinateSystem ?? model.coordinateSystem, model.scene.coordinateSystem, createMat4Float64());
+      const outputToWorld = createCoordinateSystemTransform(
+        options?.coordinateSystem ?? model.coordinateSystem,
+        model.scene.coordinateSystem,
+        createMat4Float64()
+      );
       const frame = inverseMat4(outputToWorld, createMat4Float64());
       const matrix = light.parentTransform?.worldMatrix ?? model.coordinateSystemMatrix;
-      return { ...result.value, parentTransformId: void 0, frameMatrix: Array.from(mulMat4(frame, matrix, createMat4Float64())) };
+      return {
+        ...result.value,
+        parentTransformId: void 0,
+        frameMatrix: Array.from(mulMat4(frame, matrix, createMat4Float64()))
+      };
     }
     return result.value;
   });
-  const clipBindings = Object.fromEntries(Object.values(model.meshes).filter((mesh) => mesh.clipBoxId).map((mesh) => [mesh.id, mesh.clipBoxId]));
+  const clipBindings = Object.fromEntries(
+    Object.values(model.meshes).filter((mesh) => mesh.clipBoxId).map((mesh) => [mesh.id, mesh.clipBoxId])
+  );
   const resources = Object.values(model.dataResources ?? {});
   let resourceBytes = 0;
   const descriptors = resources.map((resource) => {
@@ -114572,7 +116811,17 @@ async function encode12(params, options) {
   }
   const metadata = new TextEncoder().encode(
     JSON.stringify({
-      schema: clipBoxes.length ? 3 : 2,
+      schema: externalAssets || hasSources ? 4 : clipBoxes.length ? 3 : 2,
+      ...externalAssets || hasSources ? {
+        externalAssets: externalAssets ?? {
+          references: [],
+          geometries: {},
+          materials: {},
+          textures: {},
+          materialTextures: {}
+        }
+      } : {},
+      ...hasSources ? { sourceMappings } : {},
       ...lights.length ? { lights } : {},
       ...clipBoxes.length ? { clipBoxes, clipBindings } : {},
       coordinateSystem: options?.coordinateSystem?.toParams?.() ?? options?.coordinateSystem ?? model.coordinateSystem.toParams(),
@@ -114608,6 +116857,14 @@ async function encode12(params, options) {
 
 // ../sdk-oct2/src/formats/xgf/XGFExporter.ts
 var XGFExporter = class extends ModelExporter {
+  write(params, options = {}) {
+    const source = params?.sceneModel;
+    const sourceMappings = source && [source.objects, source.meshes, source.transforms].some(
+      (group) => Object.values(group ?? {}).some((instance) => instance.source)
+    );
+    const version2 = params?.version ?? (sourceMappings || options.assets === "preserveExternal" ? "3.0.0" : this.defaultVersion);
+    return super.write(params ? { ...params, version: version2 } : params, options);
+  }
   constructor() {
     super({
       format: "XGF",
@@ -114624,6 +116881,13 @@ var XGFExporter = class extends ModelExporter {
 function rejectRepresentationLoss(encode21) {
   return async (params, options) => {
     const model = params.sceneModel;
+    if (model && [model.objects, model.meshes, model.transforms].some(
+      (group) => Object.values(group ?? {}).some((instance) => instance.source)
+    )) {
+      throw new Error("Source identity mappings require XGF version 3.0.0");
+    }
+    if (options?.assets === "preserveExternal")
+      throw new Error("External library references require XGF version 3.0.0");
     if (model && Object.keys(model.lights ?? {}).length) throw new Error("Scene lights require XGF version 3.0.0");
     if (model && options?.assetMode !== "assetLibrary" && Object.keys(model.clipBoxes ?? {}).length) {
       throw new Error("Scene clip boxes require XGF version 3.0.0");
@@ -114639,16 +116903,17 @@ function rejectRepresentationLoss(encode21) {
 function createXGFManifest(params, options = {}) {
   const sceneModel = params.sceneModel;
   const role = options.assetMode === "assetLibrary" || options.assetMode === "referencesOnly" ? options.assetMode : "full";
-  const allGeometryIds = sortedKeys(sceneModel.geometries);
-  const allMaterialIds = sortedKeys(sceneModel.materials);
-  const allTextureIds = sortedKeys(sceneModel.textures);
+  const names = new SceneResourceSelection(sceneModel);
+  const allGeometryIds = names.geometries.map((asset) => names.id(asset)).sort();
+  const allMaterialIds = names.materials.map((asset) => names.id(asset)).sort();
+  const allTextureIds = names.textures.map((asset) => names.id(asset)).sort();
   const usedGeometryIds = /* @__PURE__ */ new Set();
   const usedMaterialIds = /* @__PURE__ */ new Set();
   const usedTextureIds = /* @__PURE__ */ new Set();
   forEachMesh(sceneModel, (mesh) => {
-    usedGeometryIds.add(mesh.geometry.id);
+    usedGeometryIds.add(names.id(mesh.geometry));
     if (mesh.material) {
-      addMaterialDependencies(mesh.material, usedMaterialIds, usedTextureIds);
+      addMaterialDependencies(mesh.material, usedMaterialIds, usedTextureIds, names);
     }
   });
   const createsAssets = role !== "referencesOnly";
@@ -114694,9 +116959,6 @@ function createXGFManifest(params, options = {}) {
   }
   return manifest;
 }
-function sortedKeys(obj) {
-  return Object.keys(obj).sort();
-}
 function sortedSet(set) {
   return Array.from(set).sort();
 }
@@ -114705,17 +116967,17 @@ function forEachMesh(sceneModel, callback) {
     callback(sceneModel.meshes[id]);
   }
 }
-function addMaterialDependencies(material, materialIds, textureIds) {
-  materialIds.add(material.id);
-  addTextureId(textureIds, material.colorTexture);
-  addTextureId(textureIds, material.metallicRoughnessTexture);
-  addTextureId(textureIds, material.normalsTexture);
-  addTextureId(textureIds, material.occlusionTexture);
-  addTextureId(textureIds, material.emissiveTexture);
+function addMaterialDependencies(material, materialIds, textureIds, names) {
+  materialIds.add(names.id(material));
+  addTextureId(textureIds, material.colorTexture, names);
+  addTextureId(textureIds, material.metallicRoughnessTexture, names);
+  addTextureId(textureIds, material.normalsTexture, names);
+  addTextureId(textureIds, material.occlusionTexture, names);
+  addTextureId(textureIds, material.emissiveTexture, names);
 }
-function addTextureId(textureIds, texture) {
+function addTextureId(textureIds, texture, names) {
   if (texture) {
-    textureIds.add(texture.id);
+    textureIds.add(names.id(texture));
   }
 }
 function computeSceneModelAABB(sceneModel, coordinateSystem) {
@@ -114913,23 +117175,27 @@ var XGFStreamingExporter = class {
     if (validation.ok === false) {
       return validation;
     }
-    const { sceneModel } = params;
+    const sceneModel = exportResourceView(params.sceneModel);
     const outputCoordinateSystem = params.coordinateSystem || sceneModel.coordinateSystem;
     const files = {};
     const manifests = [];
     const librarySpecsById = {};
     try {
-      if (Object.keys(sceneModel.lights ?? {}).length && !params.assetLibraries.length) throw new Error("Streaming authored lights requires an asset library");
+      if (Object.keys(sceneModel.lights ?? {}).length && !params.assetLibraries.length)
+        throw new Error("Streaming authored lights requires an asset library");
       for (const spec of params.assetLibraries) {
         librarySpecsById[spec.id] = spec;
         const view = createAssetLibraryView(sceneModel, spec);
         view.lights = spec === params.assetLibraries[0] ? sceneModel.lights : {};
-        const fileData = await this._xgfExporter.write({ sceneModel: view, version: Object.keys(view.lights ?? {}).length ? "3.0.0" : "2.0.0" }, {
-          assetMode: "assetLibrary",
-          coordinateSystem: outputCoordinateSystem,
-          ignoreNormals: params.ignoreNormals,
-          ignoreUVs: params.ignoreUVs
-        }).then(unwrapSDKResult);
+        const fileData = await this._xgfExporter.write(
+          { sceneModel: view, version: Object.keys(view.lights ?? {}).length ? "3.0.0" : "2.0.0" },
+          {
+            assetMode: "assetLibrary",
+            coordinateSystem: outputCoordinateSystem,
+            ignoreNormals: params.ignoreNormals,
+            ignoreUVs: params.ignoreUVs
+          }
+        ).then(unwrapSDKResult);
         const manifest = createXGFManifest(
           { sceneModel: view },
           {
@@ -114941,7 +117207,9 @@ var XGFStreamingExporter = class {
             coordinateSystem: outputCoordinateSystem
           }
         );
-        files[spec.uri] = fileData;
+        if (params.output) await params.output.writeFile(spec.uri, fileData);
+        else files[spec.uri] = fileData;
+        manifest.xgfVersion = new DataView(fileData).getUint32(0, true) === 3 ? "3.0.0" : "2.0.0";
         manifests.push(manifest);
       }
       for (const spec of params.chunks) {
@@ -114949,14 +117217,18 @@ var XGFStreamingExporter = class {
         const dependencies = dependenciesForChunk(spec, params.assetLibraries, librarySpecsById);
         if (Object.keys(sceneModel.lights ?? {}).length) {
           const library = params.assetLibraries[0];
-          if (!dependencies.some((dependency) => dependency.id === library.id)) dependencies.push({ id: library.id, uri: library.uri });
+          if (!dependencies.some((dependency) => dependency.id === library.id))
+            dependencies.push({ id: library.id, uri: library.uri });
         }
-        const fileData = await this._xgfExporter.write({ sceneModel: view, version: Object.keys(view.clipBoxes).length ? "3.0.0" : "2.0.0" }, {
-          assetMode: "referencesOnly",
-          coordinateSystem: outputCoordinateSystem,
-          ignoreNormals: params.ignoreNormals,
-          ignoreUVs: params.ignoreUVs
-        }).then(unwrapSDKResult);
+        const fileData = await this._xgfExporter.write(
+          { sceneModel: view, version: Object.keys(view.clipBoxes).length ? "3.0.0" : "2.0.0" },
+          {
+            assetMode: "referencesOnly",
+            coordinateSystem: outputCoordinateSystem,
+            ignoreNormals: params.ignoreNormals,
+            ignoreUVs: params.ignoreUVs
+          }
+        ).then(unwrapSDKResult);
         const manifest = createXGFManifest(
           { sceneModel: view },
           {
@@ -114970,7 +117242,9 @@ var XGFStreamingExporter = class {
             coordinateSystem: outputCoordinateSystem
           }
         );
-        files[spec.uri] = fileData;
+        if (params.output) await params.output.writeFile(spec.uri, fileData);
+        else files[spec.uri] = fileData;
+        manifest.xgfVersion = new DataView(fileData).getUint32(0, true) === 3 ? "3.0.0" : "2.0.0";
         manifests.push(manifest);
       }
       const index = {
@@ -114981,10 +117255,14 @@ var XGFStreamingExporter = class {
         aabb: aggregateManifestAABB(manifests),
         coordinateSystem: cloneCoordinateSystem(outputCoordinateSystem)
       };
-      files[params.indexUri || "index.json"] = writeXGFStreamingIndex(index);
       if (params.runtimeIndexUri) {
-        files[params.runtimeIndexUri] = writeXGFStreamingRuntimeIndex(index);
+        const runtimeIndex = writeXGFStreamingRuntimeIndex(index);
+        if (params.output) await params.output.writeFile(params.runtimeIndexUri, runtimeIndex);
+        else files[params.runtimeIndexUri] = runtimeIndex;
       }
+      const indexFile = writeXGFStreamingIndex(index);
+      if (params.output) await params.output.writeFile(params.indexUri || "index.json", indexFile);
+      else files[params.indexUri || "index.json"] = indexFile;
       return {
         ok: true,
         value: {
@@ -114994,6 +117272,10 @@ var XGFStreamingExporter = class {
         }
       };
     } catch (error) {
+      try {
+        await params.output?.abort?.(error);
+      } catch {
+      }
       return { ...sdkFailure(error), error: `[XGFStreamingExporter.write] ${error?.message || error}` };
     }
   }
@@ -115038,7 +117320,9 @@ function validateParams(params) {
     if (spec.assetLibraryIds) {
       for (const assetLibraryId of spec.assetLibraryIds) {
         if (!assetLibraryIds.has(assetLibraryId)) {
-          return invalid(`[XGFStreamingExporter.write] Chunk '${spec.id}' references unknown asset library '${assetLibraryId}'`);
+          return invalid(
+            `[XGFStreamingExporter.write] Chunk '${spec.id}' references unknown asset library '${assetLibraryId}'`
+          );
         }
       }
     }
@@ -115087,7 +117371,8 @@ function createChunkView(sceneModel, spec, collapseObjects) {
       meshSet.add(mesh.id);
       chunkMeshes.push(mesh);
       addTransformAncestors(transformSet, mesh.parentTransform);
-      if (mesh.clipBox?.model === sceneModel) addTransformAncestors(transformSet, mesh.clipBox.parentTransform);
+      if (mesh.clipBoxId && sceneModel.clipBoxes[mesh.clipBoxId])
+        addTransformAncestors(transformSet, sceneModel.clipBoxes[mesh.clipBoxId].parentTransform);
     }
   }
   const view = createView(sceneModel, {
@@ -115113,6 +117398,7 @@ function createChunkView(sceneModel, spec, collapseObjects) {
 }
 function createView(sceneModel, ids2) {
   return {
+    resourceSelection: exportResources(sceneModel),
     id: sceneModel.id,
     scene: sceneModel.scene,
     coordinateSystem: sceneModel.coordinateSystem,
@@ -115120,7 +117406,10 @@ function createView(sceneModel, ids2) {
     objects: pick(sceneModel.objects, ids2.objectIds),
     meshes: pick(sceneModel.meshes, ids2.meshIds),
     transforms: pick(sceneModel.transforms || {}, ids2.transformIds),
-    clipBoxes: pick(sceneModel.clipBoxes ?? {}, new Set([...ids2.meshIds].map((id) => sceneModel.meshes[id].clipBoxId).filter((id) => !!id))),
+    clipBoxes: pick(
+      sceneModel.clipBoxes ?? {},
+      new Set([...ids2.meshIds].map((id) => sceneModel.meshes[id].clipBoxId).filter((id) => !!id))
+    ),
     geometries: pick(sceneModel.geometries, ids2.geometryIds),
     materials: pick(sceneModel.materials, ids2.materialIds),
     textures: pick(sceneModel.textures, ids2.textureIds),
@@ -115154,6 +117443,7 @@ function variantSetParamsToMap(variantSets) {
   return result;
 }
 function collectAssetIds(sceneModel, objectIds) {
+  const names = exportResources(sceneModel);
   const geometries = /* @__PURE__ */ new Set();
   const materials = /* @__PURE__ */ new Set();
   const textures = /* @__PURE__ */ new Set();
@@ -115163,10 +117453,10 @@ function collectAssetIds(sceneModel, objectIds) {
       continue;
     }
     for (const mesh of object.meshes) {
-      geometries.add(mesh.geometry.id);
+      geometries.add(names.id(mesh.geometry));
       if (mesh.material) {
-        materials.add(mesh.material.id);
-        addMaterialTextureIds(mesh.material, textures);
+        materials.add(names.id(mesh.material));
+        addMaterialTextureIds(mesh.material, textures, names);
       }
     }
   }
@@ -115176,20 +117466,20 @@ function includeMaterialTextures(sceneModel, ids2) {
   for (const materialId of ids2.materials) {
     const material = sceneModel.materials[materialId];
     if (material) {
-      addMaterialTextureIds(material, ids2.textures);
+      addMaterialTextureIds(material, ids2.textures, exportResources(sceneModel));
     }
   }
 }
-function addMaterialTextureIds(material, textures) {
-  addTextureId2(textures, material.colorTexture);
-  addTextureId2(textures, material.metallicRoughnessTexture);
-  addTextureId2(textures, material.normalsTexture);
-  addTextureId2(textures, material.occlusionTexture);
-  addTextureId2(textures, material.emissiveTexture);
+function addMaterialTextureIds(material, textures, names) {
+  addTextureId2(textures, material.colorTexture, names);
+  addTextureId2(textures, material.metallicRoughnessTexture, names);
+  addTextureId2(textures, material.normalsTexture, names);
+  addTextureId2(textures, material.occlusionTexture, names);
+  addTextureId2(textures, material.emissiveTexture, names);
 }
-function addTextureId2(textures, texture) {
+function addTextureId2(textures, texture, names) {
   if (texture) {
-    textures.add(texture.id);
+    textures.add(names.id(texture));
   }
 }
 function addTransformAncestors(transformIds, transform2) {
@@ -115263,7 +117553,7 @@ var XGFStreamExporter = class extends ModelExporter {
   }
 };
 async function encodeXGFStream(params, options = {}) {
-  const sceneModel = params.sceneModel;
+  const sceneModel = params.sceneModel ? exportResourceView(params.sceneModel) : void 0;
   if (!sceneModel) {
     throw new Error("[XGFStreamExporter.write] params.sceneModel expected");
   }
@@ -115281,37 +117571,41 @@ async function encodeXGFStream(params, options = {}) {
   if (objectIds.length === 0) {
     throw new Error("[XGFStreamExporter.write] SceneModel contains no objects");
   }
-  const chunks = splitChunksByLayer(sceneModel, createChunkSpecs({
+  const chunks = splitChunksByLayer(
     sceneModel,
-    objectIds,
-    partition,
-    chunkSize,
-    chunkMetric,
-    chunkBudget,
-    minChunkBudget,
-    gridCellSize,
-    baseUri,
-    chunkDirName,
-    assetId,
-    ignoreNormals: options.ignoreNormals === true,
-    ignoreUVs: options.ignoreUVs === true,
-    chunkGroupByObjectId: options.chunkGroupByObjectId
-  }));
+    createChunkSpecs({
+      sceneModel,
+      objectIds,
+      partition,
+      chunkSize,
+      chunkMetric,
+      chunkBudget,
+      minChunkBudget,
+      gridCellSize,
+      baseUri,
+      chunkDirName,
+      assetId,
+      ignoreNormals: options.ignoreNormals === true,
+      ignoreUVs: options.ignoreUVs === true,
+      chunkGroupByObjectId: options.chunkGroupByObjectId
+    })
+  );
   addChunkVariantSets(sceneModel, chunks, normalizeChunkVariantSetOptions(options.chunkVariantSets));
   const assetLibraries = createAssetLibrarySpecs({
     sceneModel,
     chunks,
     objectIds,
     assetId,
-    assetLibraryChunkSize: positiveInteger(options.assetLibraryChunkSize, 0),
+    assetLibraryChunkSize: positiveInteger(options.assetLibraryChunkSize, options.output ? 512 : 0),
     sharedAssetMinLibraryUses: positiveInteger(options.sharedAssetMinLibraryUses, 2),
-    sharedAssetMode: normalizeSharedAssetMode(options.sharedAssetMode || "global"),
+    sharedAssetMode: normalizeSharedAssetMode(options.sharedAssetMode || (options.output ? "sharded" : "global")),
     sharedAssetShardSize: positiveInteger(options.sharedAssetShardSize, 512),
     baseUri,
     chunkDirName
   });
   const result = await new XGFStreamingExporter().write({
     sceneModel,
+    output: options.output,
     assetLibraries,
     chunks,
     indexUri: joinUri(baseUri, indexName),
@@ -115489,7 +117783,16 @@ function createGroupedChunkSpecs(params) {
     objectIds.sort();
     for (let offset = 0, part = 0; offset < objectIds.length; offset += params.chunkSize, part++) {
       const id = `${numberedChunkId(chunkIndex)}-${groupId}${part > 0 ? `-${part}` : ""}`;
-      chunks.push(createChunkSpec(id, objectIds.slice(offset, offset + params.chunkSize), chunkIndex, params.baseUri, params.chunkDirName, params.assetId));
+      chunks.push(
+        createChunkSpec(
+          id,
+          objectIds.slice(offset, offset + params.chunkSize),
+          chunkIndex,
+          params.baseUri,
+          params.chunkDirName,
+          params.assetId
+        )
+      );
       chunkIndex++;
     }
   }
@@ -115502,7 +117805,16 @@ function createObjectOrderChunkSpecs(params) {
   const chunks = [];
   for (let offset = 0, chunkIndex = 0; offset < params.objectIds.length; offset += params.chunkSize, chunkIndex++) {
     const id = numberedChunkId(chunkIndex);
-    chunks.push(createChunkSpec(id, params.objectIds.slice(offset, offset + params.chunkSize), chunkIndex, params.baseUri, params.chunkDirName, params.assetId));
+    chunks.push(
+      createChunkSpec(
+        id,
+        params.objectIds.slice(offset, offset + params.chunkSize),
+        chunkIndex,
+        params.baseUri,
+        params.chunkDirName,
+        params.assetId
+      )
+    );
   }
   return chunks;
 }
@@ -115560,13 +117872,31 @@ function createGridChunkSpecs(params) {
     const suffix = group.coord.map((value, axis) => `${"xyz"[axis]}${signedCoord(value)}`).join("-");
     const part = countCoordOccurrence(chunks, suffix);
     const id = `${numberedChunkId(chunkIndex)}-${suffix}${part > 0 ? `-${part}` : ""}`;
-    chunks.push(createChunkSpec(id, group.records.map((record) => record.id).sort(), chunkIndex, params.baseUri, params.chunkDirName, params.assetId));
+    chunks.push(
+      createChunkSpec(
+        id,
+        group.records.map((record) => record.id).sort(),
+        chunkIndex,
+        params.baseUri,
+        params.chunkDirName,
+        params.assetId
+      )
+    );
     chunkIndex++;
   }
   const unboundedChunkSize = Math.max(1, Math.floor(params.chunkBudget));
   for (let offset = 0; offset < unboundedObjectIds.length; offset += unboundedChunkSize) {
     const id = `${numberedChunkId(chunkIndex)}-unbounded`;
-    chunks.push(createChunkSpec(id, unboundedObjectIds.slice(offset, offset + unboundedChunkSize), chunkIndex, params.baseUri, params.chunkDirName, params.assetId));
+    chunks.push(
+      createChunkSpec(
+        id,
+        unboundedObjectIds.slice(offset, offset + unboundedChunkSize),
+        chunkIndex,
+        params.baseUri,
+        params.chunkDirName,
+        params.assetId
+      )
+    );
     chunkIndex++;
   }
   return chunks;
@@ -115620,11 +117950,13 @@ function createAssetLibrarySpecs(params) {
     for (const chunk of params.chunks) {
       chunk.assetLibraryIds = [params.assetId];
     }
-    return [{
-      id: params.assetId,
-      uri: joinUri(params.baseUri, params.chunkDirName, `${params.assetId}.xgf`),
-      objectIds: params.objectIds
-    }];
+    return [
+      {
+        id: params.assetId,
+        uri: joinUri(params.baseUri, params.chunkDirName, `${params.assetId}.xgf`),
+        objectIds: params.objectIds
+      }
+    ];
   }
   const groups = [];
   for (let offset = 0, libraryIndex = 0; offset < params.chunks.length; offset += params.assetLibraryChunkSize, libraryIndex++) {
@@ -115637,7 +117969,11 @@ function createAssetLibrarySpecs(params) {
     }
     groups.push({
       id: `${params.assetId}-${String(libraryIndex).padStart(3, "0")}`,
-      uri: joinUri(params.baseUri, params.chunkDirName, `${params.assetId}-${String(libraryIndex).padStart(3, "0")}.xgf`),
+      uri: joinUri(
+        params.baseUri,
+        params.chunkDirName,
+        `${params.assetId}-${String(libraryIndex).padStart(3, "0")}.xgf`
+      ),
       priority: libraryIndex + 1,
       chunks: chunksInGroup,
       assets: collectAssetIds2(params.sceneModel, Array.from(libraryObjectIds))
@@ -115695,6 +118031,7 @@ function createAssetLibrarySpecs(params) {
   return libraries;
 }
 function collectAssetIds2(sceneModel, objectIds) {
+  const names = exportResources(sceneModel);
   const assets = {
     geometries: /* @__PURE__ */ new Set(),
     materials: /* @__PURE__ */ new Set(),
@@ -115707,11 +118044,11 @@ function collectAssetIds2(sceneModel, objectIds) {
     }
     for (const mesh of object.meshes || []) {
       if (mesh.geometry) {
-        assets.geometries.add(mesh.geometry.id);
+        assets.geometries.add(names.id(mesh.geometry));
       }
       if (mesh.material) {
-        assets.materials.add(mesh.material.id);
-        addMaterialTextureIds2(mesh.material, assets.textures);
+        assets.materials.add(names.id(mesh.material));
+        addMaterialTextureIds2(mesh.material, assets.textures, names);
       }
     }
   }
@@ -115819,16 +118156,16 @@ function sharedShardIdsForAssets(assets, assetToShardIds) {
   }
   return Array.from(shardIds).sort();
 }
-function addMaterialTextureIds2(material, textures) {
-  addTextureId3(textures, material.colorTexture);
-  addTextureId3(textures, material.metallicRoughnessTexture);
-  addTextureId3(textures, material.normalsTexture);
-  addTextureId3(textures, material.occlusionTexture);
-  addTextureId3(textures, material.emissiveTexture);
+function addMaterialTextureIds2(material, textures, names) {
+  addTextureId3(textures, material.colorTexture, names);
+  addTextureId3(textures, material.metallicRoughnessTexture, names);
+  addTextureId3(textures, material.normalsTexture, names);
+  addTextureId3(textures, material.occlusionTexture, names);
+  addTextureId3(textures, material.emissiveTexture, names);
 }
-function addTextureId3(textures, texture) {
+function addTextureId3(textures, texture, names) {
   if (texture) {
-    textures.add(texture.id);
+    textures.add(names.id(texture));
   }
 }
 function collectSharedAssets(groups, minUses) {
@@ -115906,10 +118243,10 @@ function estimateObjectCost(sceneObject, metric, ignoreNormals = false, ignoreUV
   let bytes = 0;
   for (const mesh of meshes) {
     const geometry = mesh.geometry;
-    if (!geometry || geometryIds.has(geometry.id)) {
+    if (!geometry || geometryIds.has(geometry.uniqueId ?? geometry.id)) {
       continue;
     }
-    geometryIds.add(geometry.id);
+    geometryIds.add(geometry.uniqueId ?? geometry.id);
     bytes += arrayByteLength(geometry.positionsCompressed);
     bytes += arrayByteLength(geometry.colorsCompressed);
     if (!ignoreNormals) {
@@ -115992,7 +118329,9 @@ function splitOversizedGroup(records, chunkBudget) {
   const axis = longestCenterAxis(records);
   const sorted = records.slice().sort((a2, b2) => a2.center[axis] - b2.center[axis] || a2.id.localeCompare(b2.id));
   const mid = Math.ceil(sorted.length / 2);
-  return splitOversizedGroup(sorted.slice(0, mid), chunkBudget).concat(splitOversizedGroup(sorted.slice(mid), chunkBudget));
+  return splitOversizedGroup(sorted.slice(0, mid), chunkBudget).concat(
+    splitOversizedGroup(sorted.slice(mid), chunkBudget)
+  );
 }
 function createSpatialGroup(coord, records) {
   const aabb = collapseAABB32();
@@ -143958,55 +146297,61 @@ async function encode19(params, options) {
   const texFbxId = /* @__PURE__ */ new Map();
   const usedNames = /* @__PURE__ */ new Set();
   function geometryId(geom) {
-    const existing = geomFbxId.get(geom.id);
+    const existing = geomFbxId.get(geom);
     if (existing !== void 0) return existing;
     const node = buildGeometryNode(geom, newId(), ignoreNormals, ignoreUVs);
     if (!node) return null;
-    geomFbxId.set(geom.id, node.props[0].v);
+    geomFbxId.set(geom, node.props[0].v);
     objectsChildren.push(node);
     return node.props[0].v;
   }
   async function materialId(mat) {
-    const existing = matFbxId.get(mat.id);
+    const existing = matFbxId.get(mat);
     if (existing !== void 0) return existing;
     const id = newId();
-    matFbxId.set(mat.id, id);
+    matFbxId.set(mat, id);
     const c2 = mat.color || [1, 1, 1];
-    objectsChildren.push(fbxNode(
-      "Material",
-      [fbxL(id), fbxS(`${mat.id}${SEP}Material`), fbxS("")],
-      [fbxNode("Properties70", [], [pNode("DiffuseColor", "Color", [c2[0], c2[1], c2[2]])])]
-    ));
+    objectsChildren.push(
+      fbxNode(
+        "Material",
+        [fbxL(id), fbxS(`${mat.id}${SEP}Material`), fbxS("")],
+        [fbxNode("Properties70", [], [pNode("DiffuseColor", "Color", [c2[0], c2[1], c2[2]])])]
+      )
+    );
     await emitTexture(mat, id);
     return id;
   }
   async function emitTexture(mat, matFbx) {
-    if (triplanarSkip.materialIds.has(mat.id)) return;
+    if (triplanarSkip.materialIds.has(exportResources(sceneModel).id(mat))) return;
     const tex = mat.colorTexture;
     if (!tex) return;
-    let texId = texFbxId.get(tex.id);
+    let texId = texFbxId.get(tex);
     if (texId === void 0) {
       const bytes = await textureBytes(tex);
       if (!bytes) {
         console.warn(`[FBXExporter] texture '${tex.id}' has no encodable image data; skipping.`);
-        texFbxId.set(tex.id, -1);
+        texFbxId.set(tex, -1);
         return;
       }
       texId = newId();
       const videoId = newId();
       const name14 = `${tex.id}.png`;
-      objectsChildren.push(fbxNode(
-        "Video",
-        [fbxL(videoId), fbxS(`${tex.id}${SEP}Video`), fbxS("Clip")],
-        [fbxLeaf("Content", fbxR(bytes)), fbxLeaf("RelativeFilename", fbxS(name14))]
-      ));
-      objectsChildren.push(fbxNode(
-        "Texture",
-        [fbxL(texId), fbxS(`${tex.id}${SEP}Texture`), fbxS("")],
-        [fbxLeaf("RelativeFilename", fbxS(name14))]
-      ));
+      objectsChildren.push(
+        fbxNode(
+          "Video",
+          [fbxL(videoId), fbxS(`${tex.id}${SEP}Video`), fbxS("Clip")],
+          [fbxLeaf("Content", fbxR(bytes)), fbxLeaf("RelativeFilename", fbxS(name14))]
+        )
+      );
+      objectsChildren.push(
+        fbxNode(
+          "Texture",
+          [fbxL(texId), fbxS(`${tex.id}${SEP}Texture`), fbxS("")],
+          [fbxLeaf("RelativeFilename", fbxS(name14))]
+        )
+      );
       connections.push(connOO(videoId, texId));
-      texFbxId.set(tex.id, texId);
+      texFbxId.set(tex, texId);
     }
     if (texId < 0) return;
     connections.push(connOP(texId, matFbx, "DiffuseColor"));
@@ -144023,15 +146368,23 @@ async function encode19(params, options) {
       while (usedNames.has(name14)) name14 = `${objectId}_${modelId}`;
       usedNames.add(name14);
       const { t, r, s } = decomposeTRS(mesh.matrix);
-      objectsChildren.push(fbxNode(
-        "Model",
-        [fbxL(modelId), fbxS(`${name14}${SEP}Model`), fbxS("Mesh")],
-        [fbxNode("Properties70", [], [
-          pNode("Lcl Translation", "Lcl Translation", t),
-          pNode("Lcl Rotation", "Lcl Rotation", r),
-          pNode("Lcl Scaling", "Lcl Scaling", s)
-        ])]
-      ));
+      objectsChildren.push(
+        fbxNode(
+          "Model",
+          [fbxL(modelId), fbxS(`${name14}${SEP}Model`), fbxS("Mesh")],
+          [
+            fbxNode(
+              "Properties70",
+              [],
+              [
+                pNode("Lcl Translation", "Lcl Translation", t),
+                pNode("Lcl Rotation", "Lcl Rotation", r),
+                pNode("Lcl Scaling", "Lcl Scaling", s)
+              ]
+            )
+          ]
+        )
+      );
       connections.push(connOO(gId, modelId));
       if (mesh.material) {
         connections.push(connOO(await materialId(mesh.material), modelId));
@@ -144039,10 +146392,7 @@ async function encode19(params, options) {
       connections.push(connOO(modelId, 0));
     }
   }
-  return writeFBXBinary([
-    fbxNode("Objects", [], objectsChildren),
-    fbxNode("Connections", [], connections)
-  ]);
+  return writeFBXBinary([fbxNode("Objects", [], objectsChildren), fbxNode("Connections", [], connections)]);
 }
 function buildGeometryNode(geom, id, ignoreNormals, ignoreUVs) {
   const pc = geom.positionsCompressed;
@@ -144083,11 +146433,15 @@ function buildGeometryNode(geom, id, ignoreNormals, ignoreUVs) {
   return fbxNode("Geometry", [fbxL(id), fbxS(`${geom.id}${SEP}Geometry`), fbxS("Mesh")], children);
 }
 function layerNode(layerName, dataName, data) {
-  return fbxNode(layerName, [fbxI(0)], [
-    fbxLeaf("MappingInformationType", fbxS("ByVertice")),
-    fbxLeaf("ReferenceInformationType", fbxS("Direct")),
-    fbxLeaf(dataName, fbxDArr(data))
-  ]);
+  return fbxNode(
+    layerName,
+    [fbxI(0)],
+    [
+      fbxLeaf("MappingInformationType", fbxS("ByVertice")),
+      fbxLeaf("ReferenceInformationType", fbxS("Direct")),
+      fbxLeaf(dataName, fbxDArr(data))
+    ]
+  );
 }
 function pNode(name14, type, vals) {
   const props = [fbxS(name14), fbxS(type), fbxS(""), fbxS("A")];
@@ -144169,7 +146523,9 @@ async function canvasEncodePNG(source) {
   } else {
     ctx.drawImage(source, 0, 0);
   }
-  const blob = await new Promise((res, rej) => canvas.toBlob((b2) => b2 ? res(b2) : rej("toBlob failed"), "image/png"));
+  const blob = await new Promise(
+    (res, rej) => canvas.toBlob((b2) => b2 ? res(b2) : rej("toBlob failed"), "image/png")
+  );
   return new Uint8Array(await blob.arrayBuffer());
 }
 
@@ -146551,13 +148907,17 @@ var DEGENERATE_AREA_EPS_SQ = 1e-20;
 // ../sdk-oct2/src/quality/sceneModel/internal/objectEquivalent.ts
 function objectEquivalent(a2, b2) {
   if (a2 === b2 || a2.layerId !== b2.layerId || a2.clippable !== b2.clippable) return false;
-  const live = (object) => object.meshes.filter((mesh) => mesh && !mesh.destroyed && mesh.object === object && object.model.meshes[mesh.id] === mesh);
+  const live = (object) => object.meshes.filter(
+    (mesh) => mesh && !mesh.destroyed && mesh.object === object && object.scene.meshes[mesh.uniqueId] === mesh
+  );
   const left = live(a2), remaining = live(b2);
   if (!left.length || left.length !== remaining.length) return false;
   const animated = animatedMeshIds(a2.model);
   if ([...left, ...remaining].some((mesh) => animated.has(mesh.id))) return false;
   for (const mesh of left) {
-    const index = remaining.findIndex((other) => mesh.parentTransform === other.parentTransform && sameArray(mesh.matrix, other.matrix) && mesh.materialId === other.materialId && sameArray(mesh.color, other.color) && mesh.opacity === other.opacity && mesh.bin === other.bin && mesh.billboard === other.billboard && mesh.representationId === other.representationId && mesh.representationMode === other.representationMode && mesh.frameTime === other.frameTime && sameArray(mesh.morphWeights, other.morphWeights) && mesh.vertexState.stateAIndex === other.vertexState.stateAIndex && mesh.vertexState.stateBIndex === other.vertexState.stateBIndex && mesh.vertexState.factor === other.vertexState.factor && geometryEquivalent(mesh.geometry, other.geometry));
+    const index = remaining.findIndex(
+      (other) => mesh.parentTransform === other.parentTransform && sameArray(mesh.matrix, other.matrix) && mesh.materialId === other.materialId && sameArray(mesh.color, other.color) && mesh.opacity === other.opacity && mesh.bin === other.bin && mesh.billboard === other.billboard && mesh.representationId === other.representationId && mesh.representationMode === other.representationMode && mesh.frameTime === other.frameTime && sameArray(mesh.morphWeights, other.morphWeights) && mesh.vertexState.stateAIndex === other.vertexState.stateAIndex && mesh.vertexState.stateBIndex === other.vertexState.stateBIndex && mesh.vertexState.factor === other.vertexState.factor && geometryEquivalent(mesh.geometry, other.geometry)
+    );
     if (index < 0) return false;
     remaining.splice(index, 1);
   }
@@ -147841,7 +150201,9 @@ function splitSceneGeometry(params) {
     return errInvalid("[splitSceneGeometry] sceneGeometry is required");
   }
   if (!isTriangleMesh(src)) {
-    return errInvalid(`[splitSceneGeometry] SceneGeometry '${src.id}' primitive ${src.primitive} is not triangle-indexed`);
+    return errInvalid(
+      `[splitSceneGeometry] SceneGeometry '${src.id}' primitive ${src.primitive} is not triangle-indexed`
+    );
   }
   const indices = src.indices;
   if (!indices || indices.length === 0 || indices.length % 3 !== 0) {
@@ -147851,10 +150213,6 @@ function splitSceneGeometry(params) {
   const aabb = src.aabb;
   if (!positionsCompressed || !aabb) {
     return errInvalid(`[splitSceneGeometry] SceneGeometry '${src.id}' has no positions / AABB`);
-  }
-  const sceneModel = src.model;
-  if (!sceneModel) {
-    return errInvalid(`[splitSceneGeometry] SceneGeometry '${src.id}' has no SceneModel`);
   }
   const triCount = indices.length / 3 | 0;
   const halfCount = triCount / 2 | 0;
@@ -147918,10 +150276,7 @@ function buildSide(src, newId, tris, indices) {
     const positionsCompressed = new Uint16Array(positions.length);
     for (let i = 0; i < positions.length; i++) {
       const axis = i % 3, range = aabb[axis + 3] - aabb[axis];
-      positionsCompressed[i] = range ? Math.max(0, Math.min(
-        65535,
-        Math.round((positions[i] - aabb[axis]) * 65535 / range)
-      )) : 0;
+      positionsCompressed[i] = range ? Math.max(0, Math.min(65535, Math.round((positions[i] - aabb[axis]) * 65535 / range))) : 0;
     }
     return { aabb, positionsCompressed };
   };
@@ -147940,13 +150295,18 @@ function buildSide(src, newId, tris, indices) {
   }
   const frames = src.framesCompressed?.map(state);
   const vertexStates = src.vertexStatesCompressed === src.framesCompressed ? frames : src.vertexStatesCompressed?.map(state);
-  return src.model.createGeometryCompressed({
+  return (src.model ?? src.scene).createGeometryCompressed({
     id: newId,
     primitive: src.primitive,
     ...positionSubset(src.positionsCompressed, src.aabb),
     normalsCompressed: src.normalsCompressed ? new Uint16Array(gather(src.normalsCompressed, 2)) : void 0,
     uvsCompressed: src.uvsCompressed ? new Float32Array(gather(src.uvsCompressed, 2)) : void 0,
-    texCoordsCompressed: src.texCoordsCompressed && Object.fromEntries(Object.entries(src.texCoordsCompressed).map(([channel, values2]) => [channel, new Float32Array(gather(values2, 2))])),
+    texCoordsCompressed: src.texCoordsCompressed && Object.fromEntries(
+      Object.entries(src.texCoordsCompressed).map(([channel, values2]) => [
+        channel,
+        new Float32Array(gather(values2, 2))
+      ])
+    ),
     colorsCompressed: src.colorsCompressed ? new Uint8Array(gather(src.colorsCompressed, 4)) : void 0,
     framesCompressed: frames,
     vertexStatesCompressed: vertexStates,
@@ -148169,23 +150529,25 @@ function snapshotGeometryMutation(geom) {
   };
 }
 function finishGeometryMutation(geom, before) {
-  const model = geom.model;
   const after = snapshotGeometryMutation(geom);
-  model.stats.numVertices += vertexCount(after) - vertexCount(before);
-  model.stats.numTriangles += triangleCount(after) - triangleCount(before);
-  model.stats.numLines += lineCount(after) - lineCount(before);
-  model.stats.numPoints += pointCount(after) - pointCount(before);
-  if (after.primitive !== before.primitive) {
-    const bumpPrimitiveCount = model._bumpPrimitiveCount;
-    if (bumpPrimitiveCount) {
-      bumpPrimitiveCount.call(model, before.primitive, -1);
-      bumpPrimitiveCount.call(model, after.primitive, 1);
+  geom.scene.assets.geometryPrimitiveChanged(before.primitive, after.primitive);
+  for (const [model, aliases] of geom.scene.assets.documents(geom)) {
+    model.stats.numVertices += vertexCount(after) - vertexCount(before);
+    model.stats.numTriangles += triangleCount(after) - triangleCount(before);
+    model.stats.numLines += lineCount(after) - lineCount(before);
+    model.stats.numPoints += pointCount(after) - pointCount(before);
+    if (after.primitive !== before.primitive) {
+      const bumpPrimitiveCount = model._bumpPrimitiveCount;
+      if (bumpPrimitiveCount) {
+        bumpPrimitiveCount.call(model, before.primitive, -1);
+        bumpPrimitiveCount.call(model, after.primitive, 1);
+      }
     }
+    for (const alias of aliases) getInspectionIndex(model).invalidateGeometry(alias);
   }
-  getInspectionIndex(model).invalidateGeometry(geom.id);
   geom.version++;
   geom.lastUpdateFlags = 0;
-  model.scene.events.onSceneGeometryUpdated.dispatch(model.scene, geom);
+  geom.scene.events.onSceneGeometryUpdated.dispatch(geom.scene, geom);
 }
 function vertexCount(snapshot) {
   return snapshot.positionsLength / 3;
@@ -148202,6 +150564,7 @@ function pointCount(snapshot) {
 
 // ../sdk-oct2/src/quality/sceneModel/internal/applyGeometryBuffers.ts
 function applyGeometryBuffers(geometry, buffers) {
+  unwrapSDKResult(geometry.scene.assets.assertMutable(geometry));
   const before = snapshotGeometryMutation(geometry);
   const { positionsCompressed, normalsCompressed, uvsCompressed, indices, ...attributes } = buffers;
   Object.assign(geometry, attributes);

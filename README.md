@@ -152,3 +152,6 @@ Models can act as a library picker for Studio while Studio keeps its workspace o
 ## Optional server-side properties
 
 IFC imports can keep property values in Models while viewers load the object graph and request values on selection. Choose the default in Processing settings or override it per import. Embedded JSON remains the default. See [external properties](docs/external-properties.md) for the TypeScript API, storage, cancellation, and complete offline exports.
+
+See [scene asset integration](docs/scene-assets.md) for shared resources, pinned
+XGF references, trusted transport and lifetime rules.

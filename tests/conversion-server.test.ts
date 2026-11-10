@@ -79,6 +79,11 @@ test('conversion routes generate on demand, cache downloads, and delete with the
       (await client.downloadFormats(model.id)).formats.find((item) => item.format === 'glb')
         ?.cached,
     ).toBe(true);
+    const references = await client.sceneAssets.references(model.id);
+    expect(references.length).toBeGreaterThan(0);
+    const shards = await client.sceneAssets.resolve(references);
+    expect(shards.flatMap((shard) => shard.geometryIds)).toHaveLength(references.length);
+    expect(shards.every((shard) => shard.bytes.byteLength > 4)).toBe(true);
     const headers = { 'X-Models-Action': 'explicit' };
     const endpoint = server.url + '/api/models/' + model.id;
     expect((await fetch(endpoint + '/conversions/glb', { method: 'POST' })).status).toBe(409);
@@ -91,6 +96,9 @@ test('conversion routes generate on demand, cache downloads, and delete with the
     expect(fs.existsSync(path.join(f.directory, '.cache/conversions', model.id))).toBe(false);
     expect((await fetch(url)).status).toBe(404);
     expect((await fetch(entry)).status).toBe(404);
+    await expect(client.sceneAssets.resolve(references)).rejects.toMatchObject({
+      code: 'DOWNLOAD_FAILED',
+    });
   } finally {
     await server.close();
     await f.close();

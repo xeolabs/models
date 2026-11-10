@@ -11,7 +11,7 @@ import {
   createMat4Float64,
   inverseMat4,
   octDecodeNormalsU16
-} from "./chunk-NFE4WVL6.js";
+} from "./chunk-3FCFHIC2.js";
 
 // ../sdk-oct2/src/viewing/techniques/rayTracing/shared/materials.ts
 var MATERIAL_TEXTURE_SIZE = 512;
@@ -528,16 +528,17 @@ var FloatStream = class {
 };
 async function packScene(scene, surfaces = {}, signal, view, requestedTextureSize = 512, options = {}) {
   const allMeshes = [];
-  for (const model of Object.values(scene.models)) for (const mesh of Object.values(model.meshes)) allMeshes.push(mesh);
+  for (const mesh of Object.values(scene.meshes)) allMeshes.push(mesh);
   const bounds = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
   for (const mesh of allMeshes) {
     const b = mesh.geometry.aabb, m = mesh.worldMatrix;
     if (!b) continue;
-    for (let corner = 0; corner < 8; corner++) for (let axis = 0; axis < 3; axis++) {
-      const value = m[axis] * b[corner & 1 ? 3 : 0] + m[axis + 4] * b[corner & 2 ? 4 : 1] + m[axis + 8] * b[corner & 4 ? 5 : 2] + m[axis + 12];
-      bounds[axis] = Math.min(bounds[axis], value);
-      bounds[axis + 3] = Math.max(bounds[axis + 3], value);
-    }
+    for (let corner = 0; corner < 8; corner++)
+      for (let axis = 0; axis < 3; axis++) {
+        const value = m[axis] * b[corner & 1 ? 3 : 0] + m[axis + 4] * b[corner & 2 ? 4 : 1] + m[axis + 8] * b[corner & 4 ? 5 : 2] + m[axis + 12];
+        bounds[axis] = Math.min(bounds[axis], value);
+        bounds[axis + 3] = Math.max(bounds[axis + 3], value);
+      }
   }
   const origin = bounds.every(Number.isFinite) && bounds.some((v) => Math.abs(v) > 1e4) ? [0, 1, 2].map((axis) => (bounds[axis] + bounds[axis + 3]) / 2) : [0, 0, 0];
   const meshes = allMeshes.filter((mesh) => {
@@ -558,10 +559,11 @@ async function packScene(scene, surfaces = {}, signal, view, requestedTextureSiz
   const triangles = new FloatStream(triangleCapacity * 12), normals = new FloatStream(normalCapacity), uvs = new FloatStream(uvCapacity);
   const materials = [], sourceMeshes = [];
   const textureInputs = /* @__PURE__ */ new Set();
-  for (const mesh of meshes) for (const slot of mapSlots) {
-    const texture = mesh.material?.[`${slot}Texture`];
-    if (texture) textureInputs.add(textureImageKey(texture));
-  }
+  for (const mesh of meshes)
+    for (const slot of mapSlots) {
+      const texture = mesh.material?.[`${slot}Texture`];
+      if (texture) textureInputs.add(textureImageKey(texture));
+    }
   const textureCount = textureInputs.size;
   const textureSize = materialTextureSize(requestedTextureSize, textureCount);
   const materialPacker = createMaterialPacker(signal, textureSize, options.deferTextures);
@@ -576,7 +578,9 @@ async function packScene(scene, surfaces = {}, signal, view, requestedTextureSiz
     const geometry = mesh.geometry;
     const object = mesh.object && view?.objects[mesh.object.id];
     if (object?.viewTransform || mesh.representationId || geometry.framesCompressed?.length || geometry.morphTargets?.length || geometry.vertexStatesCompressed?.length) {
-      throw new Error("The ray-tracing add-on currently requires static triangle meshes without ViewTransforms or representations.");
+      throw new Error(
+        "The ray-tracing add-on currently requires static triangle meshes without ViewTransforms or representations."
+      );
     }
     if (![TrianglesPrimitive, SolidPrimitive, SurfacePrimitive].includes(geometry.primitive)) {
       throw new Error(`Only triangle meshes are supported: ${mesh.id}`);
@@ -584,7 +588,8 @@ async function packScene(scene, surfaces = {}, signal, view, requestedTextureSiz
     const p = geometry.positionsCompressed, bounds2 = geometry.aabb, matrix = mesh.worldMatrix;
     const indices = geometry.indices;
     const count = indices?.length ?? p.length / 3;
-    if (!bounds2 || p.length % 3 || count % 3 || !finite(bounds2) || !finite(matrix)) throw new Error(`Invalid geometry: ${mesh.id}`);
+    if (!bounds2 || p.length % 3 || count % 3 || !finite(bounds2) || !finite(matrix))
+      throw new Error(`Invalid geometry: ${mesh.id}`);
     if (performance.now() >= deadline) {
       await new Promise((resolve) => setTimeout(resolve, 0));
       signal?.throwIfAborted();
@@ -665,24 +670,25 @@ async function packScene(scene, surfaces = {}, signal, view, requestedTextureSiz
       if (options.preserveSmallTriangles ? areaSquared === 0 : areaSquared < 1e-20) continue;
       if (triangles.length / 12 === start) slots = await materialPacker.mesh(mesh);
       const uvAddress = slots ? uvs.length / 40 + 1 : 0;
-      if (slots) for (const slot of slots) {
-        const transform = slot.transform, coords = slot.uvs;
-        for (let corner = 0; corner < 3; corner++) {
-          const index = corner === 0 ? ia : corner === 1 ? ib : ic;
-          let x = 0, y = 0;
-          if (coords) {
-            const u = coords[index * 2], v = coords[index * 2 + 1];
-            x = transform[0] * u + transform[2] * v + transform[4];
-            y = transform[1] * u + transform[3] * v + transform[5];
-            if (!Number.isFinite(x + y)) throw new Error(`Invalid UVs: ${mesh.id}`);
-            if (slot.flipY) y = 1 - y;
+      if (slots)
+        for (const slot of slots) {
+          const transform = slot.transform, coords = slot.uvs;
+          for (let corner = 0; corner < 3; corner++) {
+            const index = corner === 0 ? ia : corner === 1 ? ib : ic;
+            let x = 0, y = 0;
+            if (coords) {
+              const u = coords[index * 2], v = coords[index * 2 + 1];
+              x = transform[0] * u + transform[2] * v + transform[4];
+              y = transform[1] * u + transform[3] * v + transform[5];
+              if (!Number.isFinite(x + y)) throw new Error(`Invalid UVs: ${mesh.id}`);
+              if (slot.flipY) y = 1 - y;
+            }
+            uvs.data[uvs.length++] = x;
+            uvs.data[uvs.length++] = y;
           }
-          uvs.data[uvs.length++] = x;
-          uvs.data[uvs.length++] = y;
+          uvs.data[uvs.length++] = coords ? 1 : 0;
+          uvs.data[uvs.length++] = 0;
         }
-        uvs.data[uvs.length++] = coords ? 1 : 0;
-        uvs.data[uvs.length++] = 0;
-      }
       const normalAddress = vertexNormals ? normals.length / 4 + 1 : 0;
       const t = triangles.length, out = triangles.data;
       out[t] = ax;
@@ -698,15 +704,16 @@ async function packScene(scene, surfaces = {}, signal, view, requestedTextureSiz
       out[t + 10] = acz;
       out[t + 11] = uvAddress;
       triangles.length += 12;
-      if (vertexNormals) for (let corner = 0; corner < 3; corner++) {
-        const index = (corner === 0 ? ia : corner === 1 ? ib : ic) * 3;
-        const n = normals.length;
-        normals.data[n] = vertexNormals[index];
-        normals.data[n + 1] = vertexNormals[index + 1];
-        normals.data[n + 2] = vertexNormals[index + 2];
-        normals.data[n + 3] = 0;
-        normals.length += 4;
-      }
+      if (vertexNormals)
+        for (let corner = 0; corner < 3; corner++) {
+          const index = (corner === 0 ? ia : corner === 1 ? ib : ic) * 3;
+          const n = normals.length;
+          normals.data[n] = vertexNormals[index];
+          normals.data[n + 1] = vertexNormals[index + 1];
+          normals.data[n + 2] = vertexNormals[index + 2];
+          normals.data[n + 3] = 0;
+          normals.length += 4;
+        }
     }
     const triangleCount = triangles.length / 12 - start;
     if (!triangleCount) continue;
@@ -722,30 +729,40 @@ async function packScene(scene, surfaces = {}, signal, view, requestedTextureSiz
     );
   }
   if (!triangles.length && !view) throw new Error("Scene contains no triangles.");
-  if (!triangles.length) return {
-    origin,
-    textureSize,
-    triangles: new Float32Array(4),
-    normals: new Float32Array(4),
-    materials: new Float32Array(4),
-    pbr: new Float32Array(4),
-    uvs: new Float32Array(4),
-    bindings: new Float32Array(4),
-    images: [],
-    nodes: new Float32Array(4),
-    triangleCount: 0,
-    meshCount: 0,
-    nodeCount: 0,
-    textureBindings: []
-  };
-  const bvh = await buildBVH(triangles.finish(), signal, { inPlace: true, axes: options.bvh?.axes, leafSize: options.bvh?.leafSize });
+  if (!triangles.length)
+    return {
+      origin,
+      textureSize,
+      triangles: new Float32Array(4),
+      normals: new Float32Array(4),
+      materials: new Float32Array(4),
+      pbr: new Float32Array(4),
+      uvs: new Float32Array(4),
+      bindings: new Float32Array(4),
+      images: [],
+      nodes: new Float32Array(4),
+      triangleCount: 0,
+      meshCount: 0,
+      nodeCount: 0,
+      textureBindings: []
+    };
+  const bvh = await buildBVH(triangles.finish(), signal, {
+    inPlace: true,
+    axes: options.bvh?.axes,
+    leafSize: options.bvh?.leafSize
+  });
   return {
     ...bvh,
     origin,
     textureSize,
     sourceMeshes: options.trackMaterials ? sourceMeshes : void 0,
     normals: normals.finish(),
-    materials: appendLightingDomains(appendFlatClipBoxes(new Float32Array(materials), sourceMeshes, origin), scene, origin, sourceMeshes.length),
+    materials: appendLightingDomains(
+      appendFlatClipBoxes(new Float32Array(materials), sourceMeshes, origin),
+      scene,
+      origin,
+      sourceMeshes.length
+    ),
     pbr: new Float32Array(materialPacker.pbr),
     uvs: uvs.finish(),
     bindings: new Float32Array(materialPacker.bindings.length ? materialPacker.bindings : [0, 0, 0, 0]),
@@ -982,7 +999,7 @@ function canonicalBits(bits) {
 // ../sdk-oct2/src/viewing/techniques/rayTracing/shared/updates.ts
 function geometrySignature(scene, view) {
   const values = [];
-  for (const model of Object.values(scene.models)) for (const mesh of Object.values(model.meshes)) {
+  for (const mesh of Object.values(scene.meshes)) {
     const g = mesh.geometry, object = mesh.object && view.objects[mesh.object.id];
     values.push(mesh, g, g.version, object?.visible, object?.culled, object?.viewTransform, mesh.representationId);
     for (let i = 0; i < 16; i++) values.push(mesh.worldMatrix[i]);
@@ -1000,10 +1017,11 @@ function sameSignature(a, b) {
 }
 async function refreshMaterials(previous, meshes, surfaces = {}, signal, view, requested) {
   const textures = /* @__PURE__ */ new Set();
-  for (const mesh of meshes) for (const slot of mapSlots) {
-    const t = mesh.material?.[`${slot}Texture`];
-    if (t) textures.add(textureImageKey(t));
-  }
+  for (const mesh of meshes)
+    for (const slot of mapSlots) {
+      const t = mesh.material?.[`${slot}Texture`];
+      if (t) textures.add(textureImageKey(t));
+    }
   const textureSize = materialTextureSize(requested, textures.size), packer = createMaterialPacker(signal, textureSize, true), materials = new Float32Array(Math.max(4, meshes.length * 8));
   for (let i = 0; i < meshes.length; i++) {
     signal.throwIfAborted();
@@ -1018,7 +1036,12 @@ async function refreshMaterials(previous, meshes, surfaces = {}, signal, view, r
   signal.throwIfAborted();
   return {
     ...previous,
-    materials: appendLightingDomains(appendFlatClipBoxes(materials, meshes, previous.origin ?? [0, 0, 0]), view.viewer?.scene ?? meshes[0]?.model?.scene, previous.origin ?? [0, 0, 0], meshes.length),
+    materials: appendLightingDomains(
+      appendFlatClipBoxes(materials, meshes, previous.origin ?? [0, 0, 0]),
+      view.viewer?.scene ?? meshes[0]?.scene,
+      previous.origin ?? [0, 0, 0],
+      meshes.length
+    ),
     pbr: new Float32Array(packer.pbr.length ? packer.pbr : [0, 0, 0, 0]),
     bindings: new Float32Array(packer.bindings.length ? packer.bindings : [0, 0, 0, 0]),
     textureSize,
@@ -1204,16 +1227,19 @@ function createInstancePacker(bvh) {
     signal?.throwIfAborted();
     const meshes = [];
     const bounds = new Float64Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]);
-    for (const model of Object.values(scene.models)) for (const mesh of Object.values(model.meshes)) {
+    for (const mesh of Object.values(scene.meshes)) {
       const g = mesh.geometry, m = mesh.worldMatrix, b = g.aabb, object = mesh.object && view?.objects[mesh.object.id];
-      for (let c = 0; c < 8; c++) for (let a = 0; a < 3; a++) {
-        const value = m[a] * b[c & 1 ? 3 : 0] + m[a + 4] * b[c & 2 ? 4 : 1] + m[a + 8] * b[c & 4 ? 5 : 2] + m[a + 12];
-        bounds[a] = Math.min(bounds[a], value);
-        bounds[a + 3] = Math.max(bounds[a + 3], value);
-      }
+      for (let c = 0; c < 8; c++)
+        for (let a = 0; a < 3; a++) {
+          const value = m[a] * b[c & 1 ? 3 : 0] + m[a + 4] * b[c & 2 ? 4 : 1] + m[a + 8] * b[c & 4 ? 5 : 2] + m[a + 12];
+          bounds[a] = Math.min(bounds[a], value);
+          bounds[a + 3] = Math.max(bounds[a + 3], value);
+        }
       if (object && (!object.visible || object.culled)) continue;
       if (object?.viewTransform || mesh.representationId || g.framesCompressed?.length || g.morphTargets?.length || g.vertexStatesCompressed?.length) {
-        throw new Error("Ray tracing currently requires static triangle meshes without ViewTransforms or representations.");
+        throw new Error(
+          "Ray tracing currently requires static triangle meshes without ViewTransforms or representations."
+        );
       }
       meshes.push(mesh);
     }
@@ -1226,10 +1252,11 @@ function createInstancePacker(bvh) {
     if (meshes.length > 8192) throw new Error("Ray tracing supports at most 8,192 instances.");
     const origin = bounds.every(Number.isFinite) && bounds.some((v) => Math.abs(v) > 1e4) ? [(bounds[0] + bounds[3]) / 2, (bounds[1] + bounds[4]) / 2, (bounds[2] + bounds[5]) / 2] : [0, 0, 0];
     const textures = /* @__PURE__ */ new Set();
-    for (const mesh of meshes) for (const slot of mapSlots) {
-      const t = mesh.material?.[`${slot}Texture`];
-      if (t) textures.add(textureImageKey(t));
-    }
+    for (const mesh of meshes)
+      for (const slot of mapSlots) {
+        const t = mesh.material?.[`${slot}Texture`];
+        if (t) textures.add(textureImageKey(t));
+      }
     const textureSize = materialTextureSize(requestedTextureSize, textures.size);
     const materials = createMaterialPacker(signal, textureSize, true), instances = [];
     const entries = [], ids = /* @__PURE__ */ new Map();
@@ -1251,8 +1278,19 @@ function createInstancePacker(bvh) {
       let blas = record.variants.get(signature);
       if (!blas) {
         const local = Object.create(mesh);
-        Object.defineProperties(local, { clipBox: { value: null }, worldMatrix: { value: createMat4Float64([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]) }, object: { value: void 0 } });
-        const packed = await packScene({ models: { local: { meshes: { local } } } }, {}, signal, { objects: {} }, textureSize, { deferTextures: true, preserveSmallTriangles: true, bvh });
+        Object.defineProperties(local, {
+          clipBox: { value: null },
+          worldMatrix: { value: createMat4Float64([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]) },
+          object: { value: void 0 }
+        });
+        const packed = await packScene(
+          { meshes: { local } },
+          {},
+          signal,
+          { objects: {} },
+          textureSize,
+          { deferTextures: true, preserveSmallTriangles: true, bvh }
+        );
         const compact = await compactAttributes(packed.triangles, packed.normals, packed.uvs, signal);
         let identity2 = record.identities.get(signature);
         if (!identity2) {
@@ -1260,7 +1298,16 @@ function createInstancePacker(bvh) {
           identity2 = {};
           record.identities.set(signature, identity2);
         }
-        blas = { identity: identity2, revision: {}, triangles: packed.triangles, ...compact, nodes: packed.nodes, nodeCount: packed.nodeCount, triangleCount: packed.triangleCount, origin: packed.origin };
+        blas = {
+          identity: identity2,
+          revision: {},
+          triangles: packed.triangles,
+          ...compact,
+          nodes: packed.nodes,
+          nodeCount: packed.nodeCount,
+          triangleCount: packed.triangleCount,
+          origin: packed.origin
+        };
         reuseLocalStreams(blas, previousVariant);
         signal?.throwIfAborted();
         if (geometry.version !== version) throw new Error("Geometry changed during BLAS preparation.");
@@ -1284,7 +1331,8 @@ function createInstancePacker(bvh) {
     }
     const triangleCount = entries.reduce((n, b) => n + b.triangleCount, 0);
     if (triangleCount > 2e6) throw new Error("Ray tracing supports at most 2,000,000 unique triangles.");
-    if (!aggregate || entries.length !== aggregate.entries.length || entries.some((b, i) => b !== aggregate.entries[i])) aggregate = combineGeometry(entries, aggregate);
+    if (!aggregate || entries.length !== aggregate.entries.length || entries.some((b, i) => b !== aggregate.entries[i]))
+      aggregate = combineGeometry(entries, aggregate);
     const shared = aggregate;
     const count = instances.length, records = new Float32Array(count * 8), instanceIds = new Uint32Array(count);
     let expandedTriangleCount = 0;
@@ -1317,18 +1365,20 @@ function createInstancePacker(bvh) {
     signal?.throwIfAborted();
     const previous = prepared;
     let reusable = !!previous && previous.shared === shared && previous.ids.length === count && origin.every((v, i) => v === previous.origin[i]);
-    if (reusable) for (let i = 0; i < count; i++) {
-      if (previous.ids[i] !== instanceIds[i]) {
-        reusable = false;
-        break;
+    if (reusable)
+      for (let i = 0; i < count; i++) {
+        if (previous.ids[i] !== instanceIds[i]) {
+          reusable = false;
+          break;
+        }
+        const m = instances[i].mesh.worldMatrix;
+        for (let a = 0; a < 16; a++)
+          if (m[a] !== previous.matrices[i * 16 + a]) {
+            reusable = false;
+            break;
+          }
+        if (!reusable) break;
       }
-      const m = instances[i].mesh.worldMatrix;
-      for (let a = 0; a < 16; a++) if (m[a] !== previous.matrices[i * 16 + a]) {
-        reusable = false;
-        break;
-      }
-      if (!reusable) break;
-    }
     let transforms, matrices, tlas;
     if (reusable) {
       transforms = previous.transforms;
@@ -1348,25 +1398,29 @@ function createInstancePacker(bvh) {
         const { mesh, blas, root } = instances[i], m = mesh.worldMatrix, localOrigin = blas.origin;
         matrices.set(m, i * 16);
         relative.set(m);
-        for (let a = 0; a < 3; a++) relative[12 + a] = m[a] * (localOrigin?.[0] ?? 0) + m[a + 4] * (localOrigin?.[1] ?? 0) + m[a + 8] * (localOrigin?.[2] ?? 0) + m[12 + a] - origin[a];
+        for (let a = 0; a < 3; a++)
+          relative[12 + a] = m[a] * (localOrigin?.[0] ?? 0) + m[a + 4] * (localOrigin?.[1] ?? 0) + m[a + 8] * (localOrigin?.[2] ?? 0) + m[12 + a] - origin[a];
         const determinant = m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) + m[8] * (m[1] * m[6] - m[5] * m[2]);
-        if (!Number.isFinite(determinant) || determinant === 0) throw new Error(`Singular ray-tracing instance transform: ${mesh.id}`);
+        if (!Number.isFinite(determinant) || determinant === 0)
+          throw new Error(`Singular ray-tracing instance transform: ${mesh.id}`);
         inverseMat4(relative, inverse);
         const offset = i * 28;
-        for (let row = 0; row < 3; row++) for (let col = 0; col < 4; col++) {
-          transforms[offset + row * 4 + col] = inverse[col * 4 + row];
-          transforms[offset + 12 + row * 4 + col] = relative[col * 4 + row];
-        }
+        for (let row = 0; row < 3; row++)
+          for (let col = 0; col < 4; col++) {
+            transforms[offset + row * 4 + col] = inverse[col * 4 + row];
+            transforms[offset + 12 + row * 4 + col] = relative[col * 4 + row];
+          }
         transforms[offset + 24] = shared.roots[root];
         transforms[offset + 25] = shared.ends[root];
         lo.fill(Infinity);
         hi.fill(-Infinity);
         const b = blas.nodes;
-        for (let corner = 0; corner < 8; corner++) for (let axis = 0; axis < 3; axis++) {
-          const v = relative[axis] * b[corner & 1 ? 4 : 0] + relative[axis + 4] * b[corner & 2 ? 5 : 1] + relative[axis + 8] * b[corner & 4 ? 6 : 2] + relative[axis + 12];
-          lo[axis] = Math.min(lo[axis], v);
-          hi[axis] = Math.max(hi[axis], v);
-        }
+        for (let corner = 0; corner < 8; corner++)
+          for (let axis = 0; axis < 3; axis++) {
+            const v = relative[axis] * b[corner & 1 ? 4 : 0] + relative[axis + 4] * b[corner & 2 ? 5 : 1] + relative[axis + 8] * b[corner & 4 ? 6 : 2] + relative[axis + 12];
+            lo[axis] = Math.min(lo[axis], v);
+            hi[axis] = Math.max(hi[axis], v);
+          }
         for (let a = 0; a < 3; a++) {
           proxies[i * 12 + a] = lo[a];
           proxies[i * 12 + 4 + a] = hi[a] - lo[a];
@@ -1394,30 +1448,40 @@ function createInstancePacker(bvh) {
       materialStream.set(localClipBoxRows(mesh, blas.origin), clipCursor);
       clipCursor += 12;
     }
-    if (ticket === generation) prepared = {
-      shared,
-      origin,
-      ids: instanceIds,
-      matrices,
-      transforms: materialStream.subarray(transformOffset * 4, tlasOffset * 4),
-      tlas: { nodes: materialStream.subarray(tlasOffset * 4, materialMapOffset * 4), nodeCount: tlas.nodeCount }
-    };
-    return withGeometry({
-      nodeCount: shared.nodeCount,
-      triangleCount: shared.triangleCount,
-      materials: appendLightingDomains(materialStream, scene, origin, unique.count),
-      pbr: unique.pbr,
-      materialCount: unique.count,
-      materialMapOffset,
-      bindings: new Float32Array(materials.bindings.length ? materials.bindings : [0, 0, 0, 0]),
-      imageSources: materials.imageSources,
-      images: [],
-      textureBindings: materials.textureBindings,
-      meshCount: count,
-      origin,
-      textureSize,
-      instances: { transformOffset, tlasOffset, tlasNodeCount: tlas.nodeCount, instanceCount: count, expandedTriangleCount }
-    }, shared.geometryLayout);
+    if (ticket === generation)
+      prepared = {
+        shared,
+        origin,
+        ids: instanceIds,
+        matrices,
+        transforms: materialStream.subarray(transformOffset * 4, tlasOffset * 4),
+        tlas: { nodes: materialStream.subarray(tlasOffset * 4, materialMapOffset * 4), nodeCount: tlas.nodeCount }
+      };
+    return withGeometry(
+      {
+        nodeCount: shared.nodeCount,
+        triangleCount: shared.triangleCount,
+        materials: appendLightingDomains(materialStream, scene, origin, unique.count),
+        pbr: unique.pbr,
+        materialCount: unique.count,
+        materialMapOffset,
+        bindings: new Float32Array(materials.bindings.length ? materials.bindings : [0, 0, 0, 0]),
+        imageSources: materials.imageSources,
+        images: [],
+        textureBindings: materials.textureBindings,
+        meshCount: count,
+        origin,
+        textureSize,
+        instances: {
+          transformOffset,
+          tlasOffset,
+          tlasNodeCount: tlas.nodeCount,
+          instanceCount: count,
+          expandedTriangleCount
+        }
+      },
+      shared.geometryLayout
+    );
   };
 }
 function createScenePacker(instancing, bvh) {
@@ -1426,7 +1490,7 @@ function createScenePacker(instancing, bvh) {
   const prepare = async (scene, surfaces, signal, view, size) => {
     let expanded = 0, unique = 0, instanceCount = 0, flatRequired = false;
     const seen = /* @__PURE__ */ new Map();
-    for (const model of Object.values(scene.models)) for (const mesh of Object.values(model.meshes)) {
+    for (const mesh of Object.values(scene.meshes)) {
       const object = mesh.object && view.objects[mesh.object.id];
       if (object && (!object.visible || object.culled)) continue;
       instanceCount++;
@@ -1468,14 +1532,24 @@ function createScenePacker(instancing, bvh) {
     }
     return pack(scene, surfaces, signal, view, size);
   };
-  return Object.assign(prepare, { release: (view) => {
-    views.delete(view);
-    flat.delete(view);
-  } });
+  return Object.assign(prepare, {
+    release: (view) => {
+      views.delete(view);
+      flat.delete(view);
+    }
+  });
 }
 function uvLayoutSignature(mesh) {
   if (!mesh.material) return "";
-  return JSON.stringify(mapSlots.map((slot) => mesh.material?.[`${slot}Texture`] ? [mesh.material?.[`${slot}TextureTexCoord`] ?? 0, Array.from(mesh.material?.[`${slot}TextureUVTransform`] ?? [1, 0, 0, 1, 0, 0]), !!mesh.material?.[`${slot}Texture`]?.flipY] : null));
+  return JSON.stringify(
+    mapSlots.map(
+      (slot) => mesh.material?.[`${slot}Texture`] ? [
+        mesh.material?.[`${slot}TextureTexCoord`] ?? 0,
+        Array.from(mesh.material?.[`${slot}TextureUVTransform`] ?? [1, 0, 0, 1, 0, 0]),
+        !!mesh.material?.[`${slot}Texture`]?.flipY
+      ] : null
+    )
+  );
 }
 
 // ../sdk-oct2/src/viewing/techniques/rayTracing/shared/features.ts
@@ -1613,19 +1687,23 @@ var FallbackImages = class {
     this.slots = slots;
     this.textureSize = data.textureSize;
     if (!slots.some((layer) => layer >= 0)) return;
-    const scenes = new Set(data.imageSources?.map((source) => source.model?.scene).filter(Boolean));
+    const scenes = new Set(data.imageSources?.map((source) => source.scene).filter(Boolean));
     for (const source of data.imageSources ?? []) this.previousKeys.set(source, textureImageKey(source));
     for (const scene of scenes) {
-      this.unsubscribe.push(scene.events.onSceneTextureImageDataChanged.subscribe((_, texture) => {
-        const key = textureImageKey(texture), old = this.previousKeys.get(texture);
-        for (const value of /* @__PURE__ */ new Set([key, old])) if (value) this.revisions.set(value, (this.revisions.get(value) ?? 0) + 1);
-        this.previousKeys.set(texture, key);
-      }));
+      this.unsubscribe.push(
+        scene.events.onSceneTextureImageDataChanged.subscribe((_, texture) => {
+          const key = textureImageKey(texture), old = this.previousKeys.get(texture);
+          for (const value of /* @__PURE__ */ new Set([key, old]))
+            if (value) this.revisions.set(value, (this.revisions.get(value) ?? 0) + 1);
+          this.previousKeys.set(texture, key);
+        })
+      );
     }
-    for (let i = 0; i < slots.length; i++) if (slots[i] >= 0) {
-      const source = data.bindings[i * 12];
-      this.layers[slots[i]] = { stamp: this.stamp(data, source), width: 0, height: 0 };
-    }
+    for (let i = 0; i < slots.length; i++)
+      if (slots[i] >= 0) {
+        const source = data.bindings[i * 12];
+        this.layers[slots[i]] = { stamp: this.stamp(data, source), width: 0, height: 0 };
+      }
   }
   stamp(data, index) {
     const source = data.imageSources?.[index];
@@ -1661,7 +1739,8 @@ var FallbackImages = class {
   async prepare(data, signal) {
     this.pending.delete(data);
     const generation = this.generation;
-    if (this.disposed || !this.layers.length || data.textureSize !== this.textureSize || Math.floor(data.bindings.length / 12) !== this.slots.length) return;
+    if (this.disposed || !this.layers.length || data.textureSize !== this.textureSize || Math.floor(data.bindings.length / 12) !== this.slots.length)
+      return;
     const sources = new Int32Array(this.layers.length).fill(-1);
     for (let i = 0; i < this.slots.length; i++) {
       const layer = this.slots[i];
@@ -1685,7 +1764,8 @@ var FallbackImages = class {
       signal?.throwIfAborted();
       if (this.disposed) return;
       if (!image) throw new Error("Missing ray-tracing fallback image.");
-      if (!same(stamp, this.stamp(data, source))) throw new DOMException("Fallback image changed during decoding", "AbortError");
+      if (!same(stamp, this.stamp(data, source)))
+        throw new DOMException("Fallback image changed during decoding", "AbortError");
       layers.push({ stamp, width: image.width, height: image.height });
       pixels.set(layer, resizeTexturePixels(image, this.width, this.height));
     }
@@ -1702,7 +1782,9 @@ var FallbackImages = class {
   get(data) {
     const update = this.pending.get(data);
     if (!update || this.disposed || update.generation !== this.generation) return;
-    for (let i = 0; i < this.slots.length; i++) if (this.slots[i] >= 0 && !same(update.layers[this.slots[i]].stamp, this.stamp(data, data.bindings[i * 12]))) return;
+    for (let i = 0; i < this.slots.length; i++)
+      if (this.slots[i] >= 0 && !same(update.layers[this.slots[i]].stamp, this.stamp(data, data.bindings[i * 12])))
+        return;
     return update;
   }
   commit(data) {

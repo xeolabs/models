@@ -17,7 +17,7 @@ import {
   streamLiveLength,
   streamUploads,
   uploadTextureRange
-} from "./chunk-3HYABQVT.js";
+} from "./chunk-YHRG2W5D.js";
 
 // ../sdk-oct2/src/viewing/techniques/rayTracing/webGL/materialShaders.ts
 var materialShaders = `

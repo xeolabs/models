@@ -1,4 +1,6 @@
 export * from './ModelPickerProtocol.js';
+export { ServerModelAssets } from './ServerModelAssets.js';
+export type * from './SceneGeometryReference.js';
 export { ServerModelsClient } from './ServerModelsClient.js';
 export type { ModelRecord, ModelQuery, ModelFile, ModelFormat } from '../domain/types.js';
 export type {
