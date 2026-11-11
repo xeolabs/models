@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { Transform } from 'node:stream';
 import { createHash, randomUUID } from 'node:crypto';
 import { noLinks } from './paths.js';
 import { fail } from '../domain/ModelsError.js';
@@ -58,39 +60,99 @@ export function mime(file: string) {
 }
 
 /**
- * Files keep their original bytes. Package paths live in SQLite, separately from hashes.
+ * Files keep their original bytes. Package paths live in PostgreSQL, separately from hashes.
  */
 export class AssetStore {
   constructor(private readonly db: Database) {}
+  async lock(): Promise<void> {
+    await this.db.lock('assets');
+  }
   path(id: string) {
     if (!/^[a-f0-9]{64}$/.test(id)) fail('ASSET_NOT_FOUND', 'Resolve file: invalid hash');
     const file = path.join(this.db.root, 'assets', 'sha256', id.slice(0, 2), id);
     noLinks(file);
     return file;
   }
-  install(source: string, expected?: string) {
-    const asset = inspect(source);
-    if (expected && asset.id !== expected)
-      fail('HASH_MISMATCH', 'Import file: SHA-256 differs from manifest');
+
+  /**
+   * Copy and hash outside the catalog transaction. The private staging directory
+   * is outside the asset shards, so GC cannot mistake it for an orphan asset.
+   */
+  async prepare(source: string, expected: string) {
+    noLinks(source);
+    const directory = path.join(this.db.root, '.cache', 'imports');
+    noLinks(directory);
+    await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
+    const stage = path.join(directory, randomUUID());
+    const hash = createHash('sha256');
+    let bytes = 0;
+    try {
+      await pipeline(
+        fs.createReadStream(source),
+        new Transform({
+          transform(chunk, _encoding, done) {
+            bytes += chunk.length;
+            if (bytes > MAX_FILE_BYTES) return done(new Error('Import exceeds 4 GiB'));
+            hash.update(chunk);
+            done(null, chunk);
+          },
+        }),
+        fs.createWriteStream(stage, { flags: 'wx', mode: 0o600 }),
+      );
+      if (hash.digest('hex') !== expected)
+        fail('HASH_MISMATCH', 'Import: source changed while staging');
+      const target = this.path(expected);
+      if (fs.existsSync(target) && (await inspectAsync(target)).id !== expected)
+        fail('HASH_MISMATCH', 'Import: existing asset is damaged');
+      return {
+        id: expected,
+        bytes,
+        originalFilename: path.basename(source),
+        mime: mime(source),
+        stage,
+      };
+    } catch (error) {
+      await fs.promises.rm(stage, { force: true });
+      throw error;
+    }
+  }
+
+  /**
+   * Install already verified bytes while holding the asset publication lock.
+   */
+  async install(asset: Awaited<ReturnType<AssetStore['prepare']>>) {
     const target = this.path(asset.id);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    if (fs.existsSync(target)) {
-      if (inspect(target).id !== asset.id)
-        fail('HASH_MISMATCH', 'Import file: existing asset is damaged');
-    } else {
-      const stage = target + '.partial-' + randomUUID();
-      try {
-        fs.copyFileSync(source, stage, fs.constants.COPYFILE_EXCL);
-        if (inspect(stage).id !== asset.id)
-          fail('HASH_MISMATCH', 'Import file: source changed while copying');
-        fs.linkSync(stage, target);
-      } finally {
-        fs.rmSync(stage, { force: true });
-      }
+    try {
+      fs.linkSync(asset.stage, target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
-    this.db.sql
-      .prepare('INSERT OR IGNORE INTO assets VALUES(?,?,?,?,?)')
-      .run(asset.id, asset.bytes, asset.mime, asset.originalFilename, new Date().toISOString());
+    await this.db.query('INSERT INTO assets VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [
+      asset.id,
+      asset.bytes,
+      asset.mime,
+      asset.originalFilename,
+      new Date().toISOString(),
+    ]);
     return asset;
   }
+}
+
+/**
+ * Hash large input asynchronously without accumulating its contents in memory.
+ */
+export async function inspectAsync(file: string) {
+  noLinks(file);
+  const stat = await fs.promises.stat(file);
+  if (!stat.isFile() || stat.size > MAX_FILE_BYTES)
+    fail('FILE_IO_ERROR', 'Inspect file: expected a regular file at most 4 GiB');
+  const hash = createHash('sha256');
+  let bytes = 0;
+  for await (const chunk of fs.createReadStream(file)) {
+    bytes += chunk.length;
+    if (bytes > MAX_FILE_BYTES) fail('FILE_IO_ERROR', 'Inspect file: size exceeds 4 GiB');
+    hash.update(chunk);
+  }
+  return { id: hash.digest('hex'), bytes, originalFilename: path.basename(file), mime: mime(file) };
 }

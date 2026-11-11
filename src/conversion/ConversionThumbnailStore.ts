@@ -55,7 +55,7 @@ export class ConversionThumbnailStore {
     id: string,
     fingerprint: string,
     source: string,
-    publish: (commit: () => void) => void,
+    publish: (commit: () => void) => void | Promise<void>,
   ) {
     const actual = await inspectConversionFile(source);
     if (actual.bytes > 2 * 1024 ** 2) fail('CONVERSION_FAILED', 'Thumbnail exceeds its size limit');
@@ -77,7 +77,7 @@ export class ConversionThumbnailStore {
         path.join(temp, 'manifest.json'),
         JSON.stringify({ bytes: actual.bytes, sha256: actual.id }),
       );
-      publish(() => {
+      await publish(() => {
         fs.rmSync(directory, { recursive: true, force: true });
         fs.renameSync(temp, directory);
       });

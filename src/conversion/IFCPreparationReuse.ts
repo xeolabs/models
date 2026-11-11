@@ -29,7 +29,7 @@ export class IFCPreparationReuse {
     candidates: { fingerprint: string; mode: PropertySetMode }[],
     signal: AbortSignal,
     report: (progress: ProcessingProgress) => void,
-    check: () => void,
+    check: () => void | Promise<void>,
   ): Promise<boolean> {
     for (const candidate of candidates) {
       const original = await this.cache.get(model.id, candidate.fingerprint, 'xgf');
@@ -40,11 +40,6 @@ export class IFCPreparationReuse {
         !original.files.some((file) => file.path === 'model.datamodel.json')
       )
         continue;
-      const propertyDatabaseFile =
-        candidate.mode === 'external'
-          ? this.properties.file(model.id, candidate.fingerprint)
-          : undefined;
-      if (propertyDatabaseFile && !fs.existsSync(propertyDatabaseFile)) continue;
       const files = original.files
         .filter((file) => !file.path.startsWith('provenance/'))
         .map((file) => ({
@@ -56,6 +51,10 @@ export class IFCPreparationReuse {
         }));
       const stage = await stageConversion(files, signal);
       try {
+        const propertyDatabaseFile =
+          candidate.mode === 'external'
+            ? await this.properties.file(model.id, candidate.fingerprint, stage.root, signal)
+            : undefined;
         report({
           phase: mode === 'external' ? 'Storing properties in database' : 'Embedding properties',
         });
@@ -106,8 +105,8 @@ export class IFCPreparationReuse {
             stage.output,
             signal,
             check,
-            () => {
-              installation?.commit();
+            async () => {
+              await installation?.commit();
               this.cache.writeOptions(model.id, target, options);
             },
           );

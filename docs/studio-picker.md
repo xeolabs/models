@@ -33,7 +33,7 @@ Cancel leaves Studio's existing models, camera, layout and import draft intact. 
 
 A request has a random request ID, the exact caller origin, accepted format names and an initial theme. Both participants validate the origin, sending window, request ID and message shape. Selection contains a model UUID and its modification timestamp, never an arbitrary download URL. Studio rereads that record from its configured server, resolves package-relative file URLs, and acknowledges it before starting the import. Duplicate replies cannot import twice.
 
-Catalog queries also accept a `formats` array through the TypeScript API or repeated `formats` URL parameters; filters and pagination are applied together in SQLite.
+Catalog queries also accept a `formats` array through the TypeScript API or repeated `formats` URL parameters; filters and pagination are applied together in PostgreSQL.
 
 ## Limits
 

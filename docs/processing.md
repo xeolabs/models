@@ -24,7 +24,7 @@ A heartbeat indicates that the worker's owning server is alive; it is not proof 
 
 | Setting       | Default       | Meaning                                                                               |
 | ------------- | ------------- | ------------------------------------------------------------------------------------- |
-| Workers       | 1 per library | Shared across server processes by SQLite claims                                       |
+| Workers       | 1 per library | Shared across server processes by PostgreSQL claims                                   |
 | CPU cores     | 1             | Linux CPU affinity, configurable from 1 to 4 available CPUs                           |
 | Priority      | Low           | Other local work takes priority                                                       |
 | Worker memory | 2048 MiB      | Linux RSS watchdog, including WASM and native buffers                                 |
@@ -35,11 +35,11 @@ User-requested work runs before automatic jobs when selecting the next job. Runn
 
 On other platforms, process priority, single-worker scheduling, timeout and the JavaScript heap limit remain. Total RSS monitoring and CPU affinity are not provided there; the dialog reports this limitation. For a strict whole-service RAM/CPU ceiling, run Models under operating-system or container resource controls as well.
 
-Copies and SHA-256 checks use asynchronous I/O outside long SQLite transactions. Input and output packages are bounded to 3 GiB and 4096 files. The worker fills binary input buffers using chunked reads, so Node's 2 GiB whole-file read limit does not block larger inputs. Generated DataModel JSON is written and reloaded incrementally to avoid JavaScript single-string limits. SDK loaders still require the complete input in memory; large IFC files can require far more RAM than their disk size. Portable ZIP and provider-download size limits are unchanged; a large generated file can be served directly over HTTP even when it cannot be packaged in a portable ZIP.
+Copies and SHA-256 checks use asynchronous I/O outside long PostgreSQL transactions. Input and output packages are bounded to 3 GiB and 4096 files. The worker fills binary input buffers using chunked reads, so Node's 2 GiB whole-file read limit does not block larger inputs. Generated DataModel JSON is written and reloaded incrementally to avoid JavaScript single-string limits. SDK loaders still require the complete input in memory; large IFC files can require far more RAM than their disk size. Portable ZIP and provider-download size limits are unchanged; a large generated file can be served directly over HTTP even when it cannot be packaged in a portable ZIP.
 
 ## Persistence and recovery
 
-Schema version 2 adds `processing_settings` and `processing_jobs` without changing original assets or material/model semantics. Active-job uniqueness prevents duplicate scheduling. Claims use a writer transaction and a process identity including PID, process start, host and boot identity. A stale heartbeat alone never authorizes stealing a job from another live process.
+Schema version 2 adds `processing_settings` and `processing_jobs` without changing original assets or material/model semantics. Active-job uniqueness prevents duplicate scheduling. Claims use a PostgreSQL transaction and a processing admission lock and a process identity including PID, process start, host and boot identity. A stale heartbeat alone never authorizes stealing a job from another live process.
 
 Queued jobs survive restarts. Closing the server stops its own worker and marks the job interrupted. An abruptly terminated owner is detected on the next claim; its job is marked interrupted for explicit retry. The child exits when its parent disconnects. Recovery does not automatically repeat a failed or interrupted massive conversion. Deleting a model removes its jobs and caches and prevents a late result from being published. A crash can leave temporary staging files; they are never considered complete caches.
 

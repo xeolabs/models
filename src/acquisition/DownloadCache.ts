@@ -94,7 +94,8 @@ export class DownloadCache {
   ): Promise<DownloadedFile | undefined> {
     const key = this.key(item, file),
       target = path.join(directory, randomUUID() + '-' + file.filename);
-    const entry = this.db.transaction(() => {
+    const entry = await this.db.transaction(async () => {
+      await this.db.lock('download-cache');
       const found = this.entries().find((e) => e.key === key);
       if (!found) return undefined;
       if (Date.now() - found.storedAt > this.maxAgeMs) {
@@ -128,7 +129,10 @@ export class DownloadCache {
         sha.digest('hex') !== entry.sha256 ||
         (providerHash && providerHash.digest('hex') !== file.checksum!.value)
       ) {
-        this.db.transaction(() => this.remove(key));
+        await this.db.transaction(async () => {
+          await this.db.lock('download-cache');
+          this.remove(key);
+        });
         fs.rmSync(target, { force: true });
         return undefined;
       }
@@ -138,9 +142,10 @@ export class DownloadCache {
       throw error;
     }
   }
-  put(item: AcquisitionPlanItem, file: ProviderDownloadFile, download: DownloadedFile) {
+  async put(item: AcquisitionPlanItem, file: ProviderDownloadFile, download: DownloadedFile) {
     if (download.bytes > this.maxBytes || this.maxAgeMs === 0) return;
-    this.db.transaction(() => {
+    await this.db.transaction(async () => {
+      await this.db.lock('download-cache');
       noLinks(this.root);
       fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
       // A crash can leave a completed binary without its metadata. These are safe to reclaim.
@@ -200,8 +205,8 @@ export class DownloadCache {
       }
     });
   }
-  stats() {
-    return this.db.transaction(() => {
+  async stats() {
+    return await this.db.transaction(async () => {
       const entries = this.entries();
       return {
         entries: entries.length,
@@ -209,16 +214,14 @@ export class DownloadCache {
         maxBytes: this.maxBytes,
         maxAgeMs: this.maxAgeMs,
         metadataEntries: Number(
-          this.db.sql.prepare('SELECT count(*) AS n FROM provider_cache').get()!.n,
+          (await this.db.one('SELECT count(*) AS n FROM provider_cache', []))!.n,
         ),
       };
     });
   }
-  clear() {
-    return this.db.transaction(() => {
-      if (
-        this.db.sql.prepare("SELECT 1 FROM acquisition_jobs WHERE status='running' LIMIT 1").get()
-      )
+  async clear() {
+    return await this.db.transaction(async () => {
+      if (await this.db.one("SELECT 1 FROM acquisition_jobs WHERE status='running' LIMIT 1", []))
         fail('JOB_CONFLICT', 'Clear cache: an acquisition job is running');
       const entries = this.entries();
       let files = 0;
@@ -232,7 +235,7 @@ export class DownloadCache {
               files++;
             }
           }
-      this.db.sql.exec('DELETE FROM provider_cache');
+      await this.db.query('DELETE FROM provider_cache');
       return { files, bytes: entries.reduce((n, e) => n + e.bytes, 0) };
     });
   }

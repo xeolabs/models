@@ -47,33 +47,22 @@ test.skipIf(process.platform !== 'linux')(
   },
 );
 
-test('low memory defers claims and migration preserves an existing version-one catalog', async () => {
-  const f = await fixture();
-  await f.library.close();
-  const db = new Database(f.directory);
+test('low memory defers PostgreSQL claims and invalid settings are rejected', async () => {
+  const f = await fixture(),
+    db = new Database(f.directory),
+    repo = new ProcessingRepository(db);
   try {
-    db.sql.exec(
-      'DROP TABLE model_properties;DROP TABLE processing_jobs;DROP TABLE processing_settings;PRAGMA user_version=1;',
-    );
-  } finally {
-    db.sql.close();
-  }
-  const migrated = new Database(f.directory);
-  try {
-    expect(migrated.sql.prepare('PRAGMA user_version').get()!.user_version).toBe(3);
-    const repo = new ProcessingRepository(migrated);
-    expect(repo.settings().automaticIFC).toBe(false);
-    expect(() => repo.configure({ memoryLimitMiB: 0 })).toThrow('invalid value');
+    expect((await repo.settings()).automaticIFC).toBe(false);
+    await expect(repo.configure({ memoryLimitMiB: 0 })).rejects.toThrow('invalid value');
     const free = vi.spyOn(os, 'freemem').mockReturnValue(0);
     try {
-      expect(repo.claim()).toBeNull();
+      expect(await repo.claim()).toBeNull();
     } finally {
       free.mockRestore();
     }
-    expect(migrated.sql.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
-    expect(migrated.sql.prepare('SELECT count(*) n FROM library_info').get()!.n).toBe(1);
+    expect((await db.one('SELECT count(*) n FROM library_info'))!.n).toBe(1);
   } finally {
-    migrated.sql.close();
+    await db.close();
     await f.close();
   }
 });

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Database } from './Database.js';
-import { AssetStore, inspect } from './AssetStore.js';
+import { AssetStore, inspectAsync } from './AssetStore.js';
 import { ModelRepository } from './ModelRepository.js';
 import { metadataSchema } from '../domain/schema.js';
 import { noLinks, relativeFile } from './paths.js';
@@ -14,19 +14,15 @@ export class Maintenance {
     private readonly db: Database,
     private readonly assets: AssetStore,
   ) {}
-  validate() {
+  async validate() {
     const errors: string[] = [],
       warnings: string[] = [];
-    if (this.db.sql.prepare('PRAGMA integrity_check').get()!.integrity_check !== 'ok')
-      errors.push('SQLite integrity check failed');
-    if (this.db.sql.prepare('PRAGMA user_version').get()!.user_version !== 3)
-      errors.push('Unsupported schema');
-    if (this.db.sql.prepare('PRAGMA foreign_key_check').all().length)
-      errors.push('Broken foreign keys');
+    if ((await this.db.one('SELECT max(version) version FROM schema_migrations'))?.version !== 1)
+      errors.push('Unsupported PostgreSQL schema');
     const repo = new ModelRepository(this.db);
-    for (const row of this.db.sql.prepare('SELECT id FROM models').all()) {
+    for (const row of await this.db.all('SELECT id FROM models', [])) {
       try {
-        const m = repo.require(row.id as string);
+        const m = await repo.require(row.id as string);
         if (!metadataSchema.safeParse(m.metadata).success) errors.push('Invalid metadata: ' + m.id);
         if (m.entrypoint && !m.files.some((f) => f.path === m.entrypoint))
           errors.push('Missing entrypoint: ' + m.id);
@@ -36,17 +32,16 @@ export class Maintenance {
       }
     }
     const referenced = new Set(
-      this.db.sql
-        .prepare('SELECT DISTINCT asset_id id FROM model_files')
-        .all()
-        .map((r) => r.id as string),
+      (await this.db.all('SELECT DISTINCT asset_id id FROM model_files', [])).map(
+        (r) => r.id as string,
+      ),
     );
     const known = new Set<string>();
-    for (const row of this.db.sql.prepare('SELECT * FROM assets').all()) {
+    for (const row of await this.db.all('SELECT * FROM assets', [])) {
       const id = row.id as string;
       known.add(id);
       try {
-        const actual = inspect(this.assets.path(id));
+        const actual = await inspectAsync(this.assets.path(id));
         if (actual.id !== id || actual.bytes !== row.bytes)
           errors.push('Hash or size mismatch: ' + id);
       } catch {
@@ -72,18 +67,15 @@ export class Maintenance {
     }
     return { errors, warnings, ok: errors.length === 0 };
   }
-  gc(dryRun = true) {
-    return this.db.transaction(() => {
-      const rows = this.db.sql
-        .prepare(
-          'SELECT id,bytes FROM assets WHERE NOT EXISTS(SELECT 1 FROM model_files WHERE asset_id=assets.id)',
-        )
-        .all();
+  async gc(dryRun = true) {
+    return await this.db.transaction(async () => {
+      await this.db.lock('assets');
+      const rows = await this.db.all(
+        'SELECT id,bytes FROM assets WHERE NOT EXISTS(SELECT 1 FROM model_files WHERE asset_id=assets.id)',
+        [],
+      );
       const known = new Set(
-        this.db.sql
-          .prepare('SELECT id FROM assets')
-          .all()
-          .map((row) => row.id as string),
+        (await this.db.all('SELECT id FROM assets', [])).map((row) => row.id as string),
       );
       const root = path.join(this.db.root, 'assets', 'sha256');
       const orphans: { path: string; bytes: number }[] = [];
@@ -108,7 +100,7 @@ export class Maintenance {
       if (!dryRun) {
         for (const row of rows) {
           fs.rmSync(this.assets.path(row.id as string), { force: true });
-          this.db.sql.prepare('DELETE FROM assets WHERE id=?').run(row.id!);
+          await this.db.query('DELETE FROM assets WHERE id=$1', [row.id!]);
         }
         for (const orphan of orphans) fs.rmSync(orphan.path, { force: true });
       }

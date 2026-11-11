@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
+import { migrateSqliteLibrary } from './storage/PostgresMigration.js';
 import { registerProcessingCommands } from './cli/processing.js';
 import { registerRemoteCommands } from './cli/remote.js';
 import { Command, CommanderError } from 'commander';
@@ -14,6 +16,7 @@ const program = new Command()
   .version('1.0.0')
   .description('Manage a local model file library')
   .option('--library <path>', 'library root')
+  .option('--database-schema <name>', 'PostgreSQL schema for initialization or migration')
   .option('--xeoifc-dir <path>', 'XeoIFC runtime directory for IFC conversions')
   .option('--json', 'emit one JSON envelope')
   .exitOverride();
@@ -47,8 +50,42 @@ async function confirm(yes: boolean | undefined) {
     prompt.close();
   }
 }
+program
+  .command('migrate-postgres')
+  .description('Copy a stopped SQLite library into an empty PostgreSQL schema')
+  .option('--activate', 'bind this asset directory to the verified PostgreSQL catalog')
+  .action(async (options) => {
+    const root = path.resolve(program.opts().library ?? process.cwd());
+    const connectionString = process.env.MODELS_DATABASE_URL;
+    if (!connectionString) fail('INVALID_LIBRARY', 'Migration: configure MODELS_DATABASE_URL');
+    const binding = path.join(root, 'postgres.json');
+    if (options.activate && fs.existsSync(binding))
+      fail('LIBRARY_ALREADY_EXISTS', 'Migration: PostgreSQL binding already exists');
+    const result = await migrateSqliteLibrary({
+      root,
+      database: { connectionString, schema: program.opts().databaseSchema },
+    });
+    if (options.activate)
+      fs.writeFileSync(
+        binding,
+        JSON.stringify({ libraryId: result.libraryId, schema: result.schema }, null, 2) + '\n',
+        { flag: 'wx', mode: 0o600 },
+      );
+    output({ ...result, activated: !!options.activate });
+  });
 program.command('init <path>').action(async (root) => {
-  const l = await ModelsLibrary.open({ root, create: true });
+  const l = await ModelsLibrary.open({
+    root,
+    create: true,
+    ...(program.opts().databaseSchema
+      ? {
+          database: {
+            connectionString: process.env.MODELS_DATABASE_URL ?? '',
+            schema: program.opts().databaseSchema,
+          },
+        }
+      : {}),
+  });
   await l.close();
   output({ root: path.resolve(root) });
 });

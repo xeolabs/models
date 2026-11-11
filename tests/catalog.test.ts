@@ -135,15 +135,21 @@ test('lifecycle and schema guards preserve existing libraries and rollback failu
   const f = await fixture();
   try {
     const db = new Database(f.directory);
-    expect(() =>
-      db.transaction(() => {
-        db.sql.prepare('INSERT INTO tags VALUES(?)').run('rollback');
-        throw Error('stop');
-      }),
-    ).toThrow();
-    expect(db.sql.prepare("SELECT * FROM tags WHERE name='rollback'").all()).toEqual([]);
-    expect(db.sql.prepare('PRAGMA foreign_keys').get()!.foreign_keys).toBe(1);
-    db.sql.close();
+    await expect(
+      async () =>
+        await db.transaction(async () => {
+          await db.query('INSERT INTO tags VALUES($1)', ['rollback']);
+          throw Error('stop');
+        }),
+    ).rejects.toThrow();
+    expect(await db.all("SELECT * FROM tags WHERE name='rollback'", [])).toEqual([]);
+    expect(
+      (await db.one(
+        "SELECT count(*) n FROM pg_constraint WHERE contype='f' AND connamespace=$1::regnamespace",
+        [db.schema],
+      ))!.n,
+    ).toBeGreaterThan(0);
+    await db.close();
     const parallel = await ModelsLibrary.open({ root: f.directory });
     await f.library.create({ metadata: { name: 'Shared' } });
     expect(await parallel.list()).toHaveLength(1);
@@ -151,8 +157,8 @@ test('lifecycle and schema guards preserve existing libraries and rollback failu
     await f.library.close();
     await expect(f.library.list()).rejects.toMatchObject({ code: 'LIBRARY_CLOSED' });
     const newer = new Database(f.directory);
-    newer.sql.exec('PRAGMA user_version=99');
-    newer.sql.close();
+    await newer.query('UPDATE schema_migrations SET version=99');
+    await newer.close();
     await expect(ModelsLibrary.open({ root: f.directory })).rejects.toMatchObject({
       code: 'UNSUPPORTED_SCHEMA',
     });

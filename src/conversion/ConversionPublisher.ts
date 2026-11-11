@@ -27,8 +27,8 @@ export class ConversionPublisher {
     output: { entrypoint: string; files: string[]; warnings: string[] },
     directory: string,
     signal: AbortSignal,
-    check: () => void,
-    onCommit: () => void = () => {},
+    check: () => void | Promise<void>,
+    onCommit: () => void | Promise<void> = () => {},
   ) {
     if (
       new Set(output.files.map((name) => name.toLowerCase())).size !== output.files.length ||
@@ -87,18 +87,19 @@ export class ConversionPublisher {
     };
     const install = await this.cache.prepareInstall(model.id, fingerprint, converted, directory);
     try {
-      this.db.transaction(() => {
-        check();
+      await this.db.transaction(async () => {
+        await this.db.lock('model:' + model.id);
+        await check();
         if (signal.aborted) fail('CONVERSION_CANCELLED', 'Convert model: cancelled');
         install.commit();
-        onCommit();
+        await onCommit();
       });
       return converted;
     } finally {
       await install.cleanup();
       // Deletion may have raced with asynchronous staging. Remove even empty
       // cache directories left by that job after the model has gone.
-      if (!this.db.sql.prepare('SELECT id FROM models WHERE id=?').get(model.id))
+      if (!(await this.db.one('SELECT id FROM models WHERE id=$1', [model.id])))
         this.cache.remove(model.id);
     }
   }

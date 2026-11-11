@@ -49,7 +49,7 @@ export class AcquisitionPlanner {
         'Plan model: only explicitly declared CC0 or CC BY 4.0 assets are supported',
       );
     }
-    return this.select(
+    return await this.select(
       model,
       this.withinPackageLimit(await adapter.getDownloads(remoteId), criteria.maxPackageBytes),
       criteria.resolution!,
@@ -61,13 +61,13 @@ export class AcquisitionPlanner {
   /**
    * Choose one format for one provider size. Execution uses this same selection rule.
    */
-  private select(
+  private async select(
     model: ProviderModel,
     downloads: ProviderDownload[],
     resolution: string,
     format: string | undefined,
     ordinal: number,
-  ): AcquisitionPlanItem {
+  ): Promise<AcquisitionPlanItem> {
     const { provider, remoteId } = model;
     const download = downloads
       .filter((d) => d.resolution === resolution && (!format || d.format === format))
@@ -96,7 +96,7 @@ export class AcquisitionPlanner {
       downloadId: download.id,
       files,
       expectedLicense: model.license,
-      existingModelId: this.plans.existing(
+      existingModelId: await this.plans.existing(
         provider,
         remoteId,
         download.resolution,
@@ -158,7 +158,7 @@ export class AcquisitionPlanner {
         continue;
       }
       try {
-        items.push(this.select(model, downloads, size, criteria.format, 0));
+        items.push(await this.select(model, downloads, size, criteria.format, 0));
       } catch (error) {
         if (
           !(error instanceof ModelsError) ||
@@ -326,6 +326,6 @@ export class AcquisitionPlanner {
       fingerprint: '',
     };
     plan.fingerprint = fingerprint(plan);
-    return this.plans.save(plan);
+    return await this.plans.save(plan);
   }
 }

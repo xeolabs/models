@@ -103,22 +103,23 @@ export function registerRemoteCommands(program: Command, context: CliContext) {
     .option('--tags <tags>')
     .option('--categories <categories>')
     .action((query, o) =>
-      acquire((a) =>
-        a.search({
-          text: query,
-          providers: providers(o.provider),
-          limit: Number(o.limit),
-          tags: o.tags?.split(','),
-          categories: o.categories?.split(','),
-        }),
+      acquire(
+        async (a) =>
+          await a.search({
+            text: query,
+            providers: providers(o.provider),
+            limit: Number(o.limit),
+            tags: o.tags?.split(','),
+            categories: o.categories?.split(','),
+          }),
       ),
     );
   remote
     .command('show <provider> <id>')
-    .action((p, id) => acquire((a) => a.getModel(provider(p), id)));
+    .action((p, id) => acquire(async (a) => await a.getModel(provider(p), id)));
   remote
     .command('downloads <provider> <id>')
-    .action((p, id) => acquire((a) => a.getDownloads(provider(p), id)));
+    .action((p, id) => acquire(async (a) => await a.getDownloads(provider(p), id)));
   const plan = remote.command('plan');
   plan
     .command('create')
@@ -135,19 +136,20 @@ export function registerRemoteCommands(program: Command, context: CliContext) {
     .option('--no-skip-existing', 'import another copy')
     .option('--allow-unknown-sizes', 'allow conservative 256 MiB reservations for unknown files')
     .action((o) =>
-      acquire((a) =>
-        a.createPlan({
-          providers: providers(o.provider, true),
-          query: o.query,
-          tags: o.tags?.split(','),
-          categories: o.categories?.split(','),
-          ...resolutions(o, '2k'),
-          format: o.format,
-          maxModels: Number(o.maxModels),
-          maxTotalBytes: parseBytes(o.maxBytes),
-          skipExisting: o.skipExisting,
-          allowUnknownSizes: !!o.allowUnknownSizes,
-        }),
+      acquire(
+        async (a) =>
+          await a.createPlan({
+            providers: providers(o.provider, true),
+            query: o.query,
+            tags: o.tags?.split(','),
+            categories: o.categories?.split(','),
+            ...resolutions(o, '2k'),
+            format: o.format,
+            maxModels: Number(o.maxModels),
+            maxTotalBytes: parseBytes(o.maxBytes),
+            skipExisting: o.skipExisting,
+            allowUnknownSizes: !!o.allowUnknownSizes,
+          }),
       ),
     );
   plan
@@ -155,7 +157,7 @@ export function registerRemoteCommands(program: Command, context: CliContext) {
     .option('--limit <count>', 'page size', '50')
     .option('--offset <count>', 'offset', '0')
     .action((o) =>
-      acquire((a) => a.listPlans({ limit: Number(o.limit), offset: Number(o.offset) })),
+      acquire(async (a) => await a.listPlans({ limit: Number(o.limit), offset: Number(o.offset) })),
     );
   plan.command('show <id>').action((id) =>
     acquire(async (a) => {
@@ -164,7 +166,7 @@ export function registerRemoteCommands(program: Command, context: CliContext) {
       return value;
     }),
   );
-  plan.command('items <id>').action((id) => acquire((a) => a.getPlanItems(id)));
+  plan.command('items <id>').action((id) => acquire(async (a) => await a.getPlanItems(id)));
   plan
     .command('execute <id>')
     .option('--yes')
@@ -172,8 +174,12 @@ export function registerRemoteCommands(program: Command, context: CliContext) {
     .option('--stop-on-error')
     .action(async (id, o) => {
       await confirm(o.yes);
-      await acquire((a) =>
-        a.executePlan(id, { concurrency: Number(o.concurrency), continueOnError: !o.stopOnError }),
+      await acquire(
+        async (a) =>
+          await a.executePlan(id, {
+            concurrency: Number(o.concurrency),
+            continueOnError: !o.stopOnError,
+          }),
       );
     });
   plan
@@ -189,14 +195,16 @@ export function registerRemoteCommands(program: Command, context: CliContext) {
         return { outputPath: file };
       }),
     );
-  plan.command('import <path>').action((file) => acquire((a) => a.importPlan(readPlan(file))));
+  plan
+    .command('import <path>')
+    .action((file) => acquire(async (a) => await a.importPlan(readPlan(file))));
   const job = remote.command('job');
   job
     .command('list')
     .option('--limit <count>', 'page size', '50')
     .option('--offset <count>', 'offset', '0')
     .action((o) =>
-      acquire((a) => a.listJobs({ limit: Number(o.limit), offset: Number(o.offset) })),
+      acquire(async (a) => await a.listJobs({ limit: Number(o.limit), offset: Number(o.offset) })),
     );
   job.command('status <id>').action((id) =>
     acquire(async (a) => {
@@ -210,7 +218,7 @@ export function registerRemoteCommands(program: Command, context: CliContext) {
     .option('--yes')
     .action(async (id, o) => {
       await confirm(o.yes);
-      await acquire((a) => a.resumeJob(id));
+      await acquire(async (a) => await a.resumeJob(id));
     });
   job.command('cancel <id>').action((id) =>
     acquire(async (a) => {
@@ -227,24 +235,25 @@ export function registerRemoteCommands(program: Command, context: CliContext) {
     .option('--tags <tags>')
     .option('--force', 'create another local model')
     .action((p, id, o) =>
-      acquire((a) =>
-        a.acquire({
-          provider: provider(p),
-          remoteId: id,
-          ...resolutions(o),
-          format: o.format,
-          tags: o.tags?.split(','),
-          force: o.force,
-        }),
+      acquire(
+        async (a) =>
+          await a.acquire({
+            provider: provider(p),
+            remoteId: id,
+            ...resolutions(o),
+            format: o.format,
+            tags: o.tags?.split(','),
+            force: o.force,
+          }),
       ),
     );
   const cache = remote.command('cache');
-  cache.command('stats').action(() => acquire((a) => a.cacheStats()));
+  cache.command('stats').action(() => acquire(async (a) => await a.cacheStats()));
   cache
     .command('clear')
     .option('--yes')
     .action(async (o) => {
       await confirm(o.yes);
-      await acquire((a) => a.clearCache());
+      await acquire(async (a) => await a.clearCache());
     });
 }

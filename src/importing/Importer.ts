@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ModelInspector } from './ModelInspector.js';
-import { AssetStore, inspect } from '../storage/AssetStore.js';
+import { AssetStore, inspectAsync } from '../storage/AssetStore.js';
 import { ModelRepository } from '../storage/ModelRepository.js';
 import { relativeFile, noLinks } from '../storage/paths.js';
 import { manifestSchema, metadataSchema, parse } from '../domain/schema.js';
@@ -17,9 +17,12 @@ export class Importer {
   constructor(
     private readonly models: ModelRepository,
     private readonly assets: AssetStore,
-    private readonly imported?: (model: ModelRecord) => void,
+    private readonly imported?: (
+      model: ModelRecord,
+      mode?: ImportOptions['propertySetMode'],
+    ) => Promise<void>,
   ) {}
-  file(options: ImportOptions): ImportReport {
+  async file(options: ImportOptions): Promise<ImportReport> {
     const file = path.resolve(options.path),
       inspection = new ModelInspector().inspect(file),
       root = path.dirname(file);
@@ -37,13 +40,16 @@ export class Importer {
       },
       root,
       !!options.dryRun,
+      undefined,
+      undefined,
+      options.propertySetMode,
     );
   }
   manifest(
     file: string,
     dryRun = false,
-    before?: () => ModelRecord | undefined,
-    after?: (m: ModelRecord) => void,
+    before?: () => Promise<ModelRecord | undefined>,
+    after?: (m: ModelRecord) => Promise<void>,
   ) {
     noLinks(file);
     if (fs.statSync(file).size > 8 * 1024 ** 2)
@@ -56,13 +62,14 @@ export class Importer {
     }
     return this.commit(data, path.dirname(file), dryRun, before, after);
   }
-  private commit(
+  private async commit(
     value: unknown,
     root: string,
     dryRun: boolean,
-    before?: () => ModelRecord | undefined,
-    after?: (m: ModelRecord) => void,
-  ): ImportReport {
+    before?: () => Promise<ModelRecord | undefined>,
+    after?: (m: ModelRecord) => Promise<void>,
+    mode?: ImportOptions['propertySetMode'],
+  ): Promise<ImportReport> {
     const manifest = parse(manifestSchema, value);
     const names = manifest.files.map((f) => f.path);
     if (names.some((name) => name.toLowerCase() === 'manifest.json'))
@@ -75,22 +82,29 @@ export class Importer {
     for (const dependency of inspection.files)
       if (!names.includes(dependency))
         fail('INVALID_BUNDLE', 'Import package: dependency omitted from manifest: ' + dependency);
-    const checked = manifest.files.map((f) => {
+    const checked: {
+      path: string;
+      file: string;
+      asset: Awaited<ReturnType<typeof inspectAsync>>;
+    }[] = [];
+    for (const f of manifest.files) {
       const file = relativeFile(root, f.path),
-        asset = inspect(file);
+        asset = await inspectAsync(file);
       if (f.sha256 && f.sha256 !== asset.id)
         fail('HASH_MISMATCH', 'Import package: hash differs for ' + f.path);
-      return { path: f.path, file, asset };
-    });
+      checked.push({ path: f.path, file, asset });
+    }
     const report: ImportReport = {
       dryRun,
       model: null,
-      files: checked.map((f) => ({
-        path: f.path,
-        sha256: f.asset.id,
-        bytes: f.asset.bytes,
-        reused: !!this.models.db.sql.prepare('SELECT id FROM assets WHERE id=?').get(f.asset.id),
-      })),
+      files: await Promise.all(
+        checked.map(async (f) => ({
+          path: f.path,
+          sha256: f.asset.id,
+          bytes: f.asset.bytes,
+          reused: !!(await this.models.db.one('SELECT id FROM assets WHERE id=$1', [f.asset.id])),
+        })),
+      ),
       warnings: inspection.warnings,
     };
     const metadata = parse(metadataSchema, {
@@ -101,22 +115,34 @@ export class Importer {
       },
     });
     if (dryRun) return report;
-    const existing = before?.();
-    if (existing) return { ...report, model: existing };
-    for (const f of checked) this.assets.install(f.file, f.asset.id);
-    const model = this.models.create(
-      metadata,
-      inspection.entrypoint,
-      inspection.format,
-      inspection.warnings,
-    );
-    for (const f of checked)
-      this.models.db.sql
-        .prepare('INSERT INTO model_files VALUES(?,?,?)')
-        .run(model.id, f.path, f.asset.id);
-    report.model = this.models.require(model.id);
-    after?.(report.model);
-    this.imported?.(report.model);
-    return report;
+    const staged: Awaited<ReturnType<AssetStore['prepare']>>[] = [];
+    try {
+      for (const f of checked) staged.push(await this.assets.prepare(f.file, f.asset.id));
+      return await this.models.db.transaction(async () => {
+        if (before || after) await this.models.db.lock('acquisition-jobs');
+        const existing = await before?.();
+        if (existing) return { ...report, model: existing };
+        await this.assets.lock();
+        for (const asset of staged) await this.assets.install(asset);
+        const model = await this.models.create(
+          metadata,
+          inspection.entrypoint,
+          inspection.format,
+          inspection.warnings,
+        );
+        for (const f of checked)
+          await this.models.db.query('INSERT INTO model_files VALUES($1,$2,$3)', [
+            model.id,
+            f.path,
+            f.asset.id,
+          ]);
+        report.model = await this.models.require(model.id);
+        await after?.(report.model);
+        await this.imported?.(report.model, mode);
+        return report;
+      });
+    } finally {
+      for (const asset of staged) await fs.promises.rm(asset.stage, { force: true });
+    }
   }
 }

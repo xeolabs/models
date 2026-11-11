@@ -35,6 +35,7 @@ export class ModelAcquisitionService {
   private readonly planner: AcquisitionPlanner;
   private readonly executor: AcquisitionExecutor;
   private closed = false;
+  private initialization?: Promise<this>;
   private closing?: Promise<void>;
   private readonly pending = new Set<Promise<unknown>>();
   private readonly cache: DownloadCache;
@@ -42,7 +43,7 @@ export class ModelAcquisitionService {
   constructor(
     private readonly db: Database,
     commit: ImportCommit,
-    getModel: (id: string) => ModelRecord | null,
+    getModel: (id: string) => Promise<ModelRecord | null>,
     private readonly assertLibraryOpen: () => Promise<void>,
     options: AcquisitionServiceOptions = {},
   ) {
@@ -55,7 +56,7 @@ export class ModelAcquisitionService {
     this.providers = options.providers ?? new ProviderRegistry(http, options.sketchfabCredential);
     this.plans = new AcquisitionPlanRepository(db);
     this.jobs = new AcquisitionJobRepository(db);
-    this.jobs.recover();
+
     this.planner = new AcquisitionPlanner(this.providers, this.plans);
     this.executor = new AcquisitionExecutor(
       this.plans,
@@ -72,6 +73,13 @@ export class ModelAcquisitionService {
       commit,
       getModel,
     );
+  }
+
+  /**
+   * Recover abandoned local executions before exposing persistent job state.
+   */
+  async initialize(): Promise<this> {
+    return (this.initialization ??= this.jobs.recover().then(() => this));
   }
   private async use<T>(operation: string, work: () => T | Promise<T>): Promise<T> {
     if (this.closed || this.closing)
@@ -104,47 +112,49 @@ export class ModelAcquisitionService {
     return this.closing;
   }
   async getAcquisitions(modelId: string): Promise<ModelAcquisition[]> {
-    return this.use('Model acquisition history', () =>
-      this.db.sql
-        .prepare('SELECT * FROM model_acquisitions WHERE model_id=? ORDER BY acquired_at,id')
-        .all(modelId)
-        .map((row) => ({
-          id: row.id as string,
-          modelId: row.model_id as string,
-          provider: row.provider as ProviderId,
-          remoteId: row.remote_asset_id as string,
-          resolution: row.resolution as string,
-          format: row.format as string,
-          sourceUrl: row.source_url as string,
-          license: JSON.parse(row.license_json as string),
-          author: (row.author as string) ?? undefined,
-          acquiredAt: row.acquired_at as string,
-          manifestFingerprint: row.manifest_fingerprint as string,
-          fileHashes: JSON.parse(row.file_hashes_json as string),
-          metadata: JSON.parse(row.metadata_json as string),
-        })),
+    return await this.use('Model acquisition history', async () =>
+      (
+        await this.db.all(
+          'SELECT * FROM model_acquisitions WHERE model_id=$1 ORDER BY acquired_at,id',
+          [modelId],
+        )
+      ).map((row) => ({
+        id: row.id as string,
+        modelId: row.model_id as string,
+        provider: row.provider as ProviderId,
+        remoteId: row.remote_asset_id as string,
+        resolution: row.resolution as string,
+        format: row.format as string,
+        sourceUrl: row.source_url as string,
+        license: JSON.parse(row.license_json as string),
+        author: (row.author as string) ?? undefined,
+        acquiredAt: row.acquired_at as string,
+        manifestFingerprint: row.manifest_fingerprint as string,
+        fileHashes: JSON.parse(row.file_hashes_json as string),
+        metadata: JSON.parse(row.metadata_json as string),
+      })),
     );
   }
   async cacheStats() {
-    return this.use('Cache statistics', () => this.cache.stats());
+    return await this.use('Cache statistics', async () => await this.cache.stats());
   }
   async clearCache() {
-    return this.use('Clear cache', () => {
-      const report = this.cache.clear();
+    return await this.use('Clear cache', async () => {
+      const report = await this.cache.clear();
       this.http.clearMemory();
       return report;
     });
   }
   async search(query: FederatedSearchQuery = {}) {
-    return this.use('Remote search', () =>
+    return await this.use('Remote search', () =>
       new FederatedSearchService(this.providers).search(query),
     );
   }
   async getModel(provider: ProviderId, id: string) {
-    return this.use('Remote model', () => this.providers.get(provider).getModel(id));
+    return await this.use('Remote model', () => this.providers.get(provider).getModel(id));
   }
   async getPreviewUrl(provider: ProviderId, id: string): Promise<string | undefined> {
-    return this.use('Remote model preview', async () => {
+    return await this.use('Remote model preview', async () => {
       const adapter = this.providers.get(provider);
       return adapter.getPreviewUrl
         ? adapter.getPreviewUrl(id)
@@ -152,55 +162,55 @@ export class ModelAcquisitionService {
     });
   }
   async getDownloads(provider: ProviderId, id: string) {
-    return this.use('Remote downloads', () => this.providers.get(provider).getDownloads(id));
+    return await this.use('Remote downloads', () => this.providers.get(provider).getDownloads(id));
   }
   async createPlan(criteria: AcquisitionCriteriaInput) {
-    return this.use('Create plan', () => this.planner.create(criteria));
+    return await this.use('Create plan', async () => await this.planner.create(criteria));
   }
   async getPlan(id: string) {
-    return this.use('Get plan', () => this.plans.get(id));
+    return await this.use('Get plan', async () => await this.plans.get(id));
   }
   async listPlans(query: PlanListQuery = {}) {
-    return this.use('List plans', () => this.plans.list(query));
+    return await this.use('List plans', async () => await this.plans.list(query));
   }
   async getPlanItems(id: string) {
-    return this.use('Plan items', () => this.plans.require(id).items);
+    return await this.use('Plan items', async () => (await this.plans.require(id)).items);
   }
   async exportPlan(id: string) {
-    return this.use('Export plan', () => this.plans.require(id));
+    return await this.use('Export plan', async () => await this.plans.require(id));
   }
   async importPlan(value: unknown) {
-    return this.use('Import plan', () => this.plans.save(value));
+    return await this.use('Import plan', async () => await this.plans.save(value));
   }
   async executePlan(id: string, options: ExecutionOptions = {}) {
-    return this.use('Execute plan', () => this.executor.execute(id, options));
+    return await this.use('Execute plan', async () => await this.executor.execute(id, options));
   }
   async startPlan(id: string, options: ExecutionOptions = {}) {
-    return this.use('Start plan', () => this.executor.start(id, options));
+    return await this.use('Start plan', async () => await this.executor.start(id, options));
   }
   async startResumeJob(id: string) {
-    return this.use('Start resume', () => this.executor.startResume(id));
+    return await this.use('Start resume', async () => await this.executor.startResume(id));
   }
   async getJob(id: string) {
-    return this.use('Get job', () => this.jobs.get(id));
+    return await this.use('Get job', async () => await this.jobs.get(id));
   }
   async listJobs(query: PlanListQuery = {}) {
-    return this.use('List jobs', () => this.jobs.list(query));
+    return await this.use('List jobs', async () => await this.jobs.list(query));
   }
   async getJobItems(id: string) {
-    return this.use('Job items', () => {
-      this.jobs.require(id);
-      return this.jobs.items(id);
+    return await this.use('Job items', async () => {
+      await this.jobs.require(id);
+      return await this.jobs.items(id);
     });
   }
   async resumeJob(id: string) {
-    return this.use('Resume job', () => this.executor.resume(id));
+    return await this.use('Resume job', async () => await this.executor.resume(id));
   }
   async cancelJob(id: string) {
-    return this.use('Cancel job', () => this.executor.cancel(id));
+    return await this.use('Cancel job', async () => await this.executor.cancel(id));
   }
   async acquire(options: AcquisitionOptions) {
-    return this.use('Acquire model', async () => {
+    return await this.use('Acquire model', async () => {
       const plan = await this.createPlan({
         providers: [options.provider],
         assets: [{ provider: options.provider, remoteId: options.remoteId }],
@@ -212,7 +222,7 @@ export class ModelAcquisitionService {
         maxModels: 1,
         skipExisting: !options.force,
       });
-      return this.executePlan(plan.id, { signal: options.signal });
+      return await this.executePlan(plan.id, { signal: options.signal });
     });
   }
 }

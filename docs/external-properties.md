@@ -155,27 +155,24 @@ produces `PROPERTIES_NOT_READY`. Property database files have no public file rou
 
 ## Storage, recovery, and deletion
 
-Catalog schema 3 adds `model_properties`, with a foreign key to `models`. Each
-published generation lives at `properties/<model-uuid>/<revision>.db`, outside the
-disposable conversion cache. Its tables are `info`, `property_sets`, `objects`,
-`object_sets`, and `property_values`. Native JSON is retained per set. Separate
-indexes serve ID lookup, associations, and scalar value queries.
+PostgreSQL owns model property registrations and published generations. Each
+generation is scoped by model UUID and revision; its tables retain native JSON,
+object associations and scalar lookup indexes.
 
-The worker verifies its staged database before publication. The server installs the
-immutable file and registers its revision in the conversion publication transaction.
-A failed or cancelled job never registers a partial database. Interrupted staging
-files may remain orphaned, but are never served. Old generations remain owned by the
-model; they are removed when that model is deleted.
+The worker still builds a private SQLite staging file. The server validates and
+uploads its rows in bounded batches, then publishes the revision with the conversion
+result. Unpublished generations are never served. Completed DataModel exports
+materialize a private worker file from PostgreSQL without loading the entire model.
 
-Deleting a library model cancels its processing, removes its registration, and
-removes all of its property database files. Later startup cleans property folders
-left by a crash after catalog deletion. Closing a preview or unloading from Studio
-only releases client resources; it does not delete the library's properties.
+Deleting a library model removes its property records through foreign keys and
+removes disposable worker files. Closing a preview or unloading from Studio only
+releases client resources. Old published SQLite files are migration backups, not
+live property storage.
 
 ## Offline exports and limits
 
 The **Download full DataModel** action runs a separate queued job. It streams values
-from SQLite into an embedded JSON document and caches the result. It does not change
+from PostgreSQL into an embedded JSON document and caches the result. It does not change
 the model's storage mode. The TS client exposes the URL through
 `client.dataModelUrl(modelId, {propertySetMode: 'embedded', download: true})`.
 Node applications use `library.resolveDataModelFile()` with the same mode option.

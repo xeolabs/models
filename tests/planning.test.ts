@@ -59,28 +59,33 @@ test('plans are persistent immutable snapshots with stable fingerprints and no b
     expect(a.fingerprint).toBe(b.fingerprint);
     expect(a.items).toHaveLength(2);
     expect(a.summary.knownBytes).toBe(20);
-    expect(repo.list({ limit: 1 }).total).toBe(2);
-    expect(repo.get(a.id)).toEqual(a);
-    expect(() =>
-      db.sql.prepare('UPDATE acquisition_plans SET fingerprint=? WHERE id=?').run('changed', a.id),
-    ).toThrow(/immutable/);
-    expect(() =>
-      db.sql.prepare('UPDATE acquisition_plan_items SET ordinal=3 WHERE id=?').run(a.items[0].id),
-    ).toThrow(/immutable/);
+    expect((await repo.list({ limit: 1 })).total).toBe(2);
+    expect(await repo.get(a.id)).toEqual(a);
+    await expect(
+      async () =>
+        await db.query('UPDATE acquisition_plans SET fingerprint=$1 WHERE id=$2', [
+          'changed',
+          a.id,
+        ]),
+    ).rejects.toThrow(/immutable/);
+    await expect(
+      async () =>
+        await db.query('UPDATE acquisition_plan_items SET ordinal=3 WHERE id=$1', [a.items[0].id]),
+    ).rejects.toThrow(/immutable/);
     const changed = structuredClone(a);
     changed.criteria.maxTotalBytes++;
     expect(() => validatePlan(changed)).toThrow();
     const json = JSON.parse(JSON.stringify(a));
-    expect(repo.save(json)).toEqual(a);
+    expect(await repo.save(json)).toEqual(a);
     expect(await f.library.list()).toHaveLength(0);
-    expect(() => repo.list({ offset: -1 })).toThrow();
-    expect(() => repo.require(randomUUID())).toThrow();
+    await expect(async () => await repo.list({ offset: -1 })).rejects.toThrow();
+    await expect(async () => await repo.require(randomUUID())).rejects.toThrow();
     const unsafe = structuredClone(a);
     unsafe.items[0].files[0].url = 'https://127.0.0.1/a';
     unsafe.fingerprint = fingerprint(unsafe);
     expect(() => validatePlan(unsafe)).toThrow();
   } finally {
-    db.sql.close();
+    await db.close();
     await f.close();
   }
 });
@@ -136,7 +141,7 @@ test('planning enforces quotas, selected bytes and explicit unknown-size policy'
       planner.create({ providers: ['polyhaven'], resolution: '4k' }),
     ).rejects.toMatchObject({ code: 'DOWNLOAD_OPTION_NOT_FOUND' });
   } finally {
-    db.sql.close();
+    await db.close();
     await f.close();
   }
 });

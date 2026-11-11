@@ -80,20 +80,21 @@ export class ModelConversionService {
     this.thumbnails = new ConversionThumbnailStore(this.cache);
     this.xeoIFC = new XeoIFCRuntime(xeoIFC);
     const jobs = new ProcessingRepository(db);
-    this.runner = new ConversionRunner(this.xeoIFC, () => jobs.settings());
+    this.runner = new ConversionRunner(this.xeoIFC, async () => await jobs.settings());
     this.publisher = new ConversionPublisher(db, assets, this.cache);
     this.queue = new ProcessingQueue(
       jobs,
-      (job, signal, report) => this.work(job, signal, report),
+      async (job, signal, report) => await this.work(job, signal, report),
       processingWorker,
     );
   }
-  private fingerprint(
+  private async fingerprint(
     model: ModelRecord,
-    mode = this.properties.info(model.id).mode,
+    mode: PropertySetMode | undefined = undefined,
     revision = converterRevision,
     legacy = false,
   ) {
+    mode ??= (await this.properties.info(model.id)).mode;
     return createHash('sha256')
       .update(
         JSON.stringify({
@@ -111,8 +112,8 @@ export class ModelConversionService {
       )
       .digest('hex');
   }
-  private current(id: string, fingerprint: string) {
-    if (this.fingerprint(this.models.require(id)) !== fingerprint)
+  private async current(id: string, fingerprint: string) {
+    if ((await this.fingerprint(await this.models.require(id))) !== fingerprint)
       fail('CONFLICT', 'Convert model: source files changed');
   }
   private checked<T extends z.ZodTypeAny>(schema: T, value: unknown): z.output<T> {
@@ -126,58 +127,61 @@ export class ModelConversionService {
    * Called inside the import transaction, after all original files are installed.
    * Scheduling never loads the IFC or requires an engine during the import itself.
    */
-  imported(model: ModelRecord) {
-    this.properties.initialize(model.id, this.settings().propertySetMode ?? 'embedded');
-    if (model.format === 'ifc' && this.queue.repository.settings().automaticIFC)
-      this.queue.repository.enqueue(model.id, 'prepare-ifc', 'xgf', 'automatic');
+  async imported(model: ModelRecord, mode?: PropertySetMode) {
+    await this.properties.initialize(
+      model.id,
+      mode ?? (await this.settings()).propertySetMode ?? 'embedded',
+    );
+    if (model.format === 'ifc' && (await this.queue.repository.settings()).automaticIFC)
+      await this.queue.repository.enqueue(model.id, 'prepare-ifc', 'xgf', 'automatic');
   }
-  configureProperties(id: string, mode: PropertySetMode) {
+  async configureProperties(id: string, mode: PropertySetMode) {
     propertyInput(propertyModeSchema, mode);
-    if (this.models.require(id).format !== 'ifc')
+    if ((await this.models.require(id)).format !== 'ifc')
       fail('UNSUPPORTED_FORMAT', 'Properties: storage selection currently requires IFC');
-    return this.db.transaction(() => {
+    return await this.db.transaction(async () => {
       if (
-        this.queue.repository
-          .list(id)
-          .some((job) => ['queued', 'running', 'cancelling'].includes(job.status))
+        (await this.queue.repository.list(id)).some((job) =>
+          ['queued', 'running', 'cancelling'].includes(job.status),
+        )
       )
         fail('JOB_CONFLICT', "Properties: wait for or cancel this model's processing job first");
-      this.properties.setMode(id, mode);
-      const job = this.queue.repository.enqueue(id, 'prepare-ifc', 'xgf', 'requested');
-      return { properties: this.properties.info(id), job };
+      await this.properties.setMode(id, mode);
+      const job = await this.queue.repository.enqueue(id, 'prepare-ifc', 'xgf', 'requested');
+      return { properties: await this.properties.info(id), job };
     });
   }
-  settings() {
-    return this.queue.repository.settings();
+  async settings() {
+    return await this.queue.repository.settings();
   }
-  configure(patch: Partial<ProcessingSettings>) {
-    return this.queue.repository.configure(patch);
+  async configure(patch: Partial<ProcessingSettings>) {
+    return await this.queue.repository.configure(patch);
   }
-  processing(modelId?: string) {
-    return this.queue.overview(modelId);
+  async processing(modelId?: string) {
+    return await this.queue.overview(modelId);
   }
-  scheduleIFC(id: string) {
-    if (this.models.require(id).format !== 'ifc')
+  async scheduleIFC(id: string) {
+    if ((await this.models.require(id)).format !== 'ifc')
       fail('UNSUPPORTED_FORMAT', 'Prepare IFC: expected an IFC model');
-    return this.queue.enqueue(id, 'prepare-ifc', 'xgf');
+    return await this.queue.enqueue(id, 'prepare-ifc', 'xgf');
   }
-  cancelJob(id: string) {
-    this.queue.cancel(id);
+  async cancelJob(id: string) {
+    await this.queue.cancel(id);
   }
-  retryJob(id: string) {
+  async retryJob(id: string) {
     const job =
-      this.queue.repository.get(id) ??
+      (await this.queue.repository.get(id)) ??
       fail('JOB_NOT_FOUND', 'Retry conversion: job does not exist');
     if (!['failed', 'interrupted', 'cancelled'].includes(job.status))
       fail('JOB_CONFLICT', 'Retry conversion: job is not stopped');
-    return this.queue.enqueue(job.modelId, job.kind, job.format);
+    return await this.queue.enqueue(job.modelId, job.kind, job.format);
   }
-  thumbnailStatus(id: string) {
-    const model = this.models.require(id);
+  async thumbnailStatus(id: string) {
+    const model = await this.models.require(id);
     if (model.format !== 'ifc') return { ready: false };
     let fingerprint: string;
     try {
-      fingerprint = this.fingerprint(model);
+      fingerprint = await this.fingerprint(model);
     } catch {
       return { ready: false };
     }
@@ -186,12 +190,10 @@ export class ModelConversionService {
     // instead of queuing a second thumbnail while the first is still being saved.
     if (
       !preview &&
-      this.queue.repository
-        .list(id)
-        .some(
-          (job) =>
-            job.kind === 'prepare-ifc' && ['queued', 'running', 'cancelling'].includes(job.status),
-        )
+      (await this.queue.repository.list(id)).some(
+        (job) =>
+          job.kind === 'prepare-ifc' && ['queued', 'running', 'cancelling'].includes(job.status),
+      )
     )
       return { ready: false };
     if (!preview && !this.cache.has(id, fingerprint, 'xgf')) return { ready: false };
@@ -207,15 +209,15 @@ export class ModelConversionService {
     };
   }
   async resolveThumbnail(id: string) {
-    const model = this.models.require(id),
-      fingerprint = this.fingerprint(model);
+    const model = await this.models.require(id),
+      fingerprint = await this.fingerprint(model);
     if (model.format !== 'ifc') fail('UNSUPPORTED_FORMAT', 'Thumbnail: expected an IFC model');
     let preview = await this.thumbnails.resolve(id, fingerprint);
     if (preview) return preview;
     // A library card must not trigger a whole-library IFC preparation when automatic mode is off.
     if (!this.cache.has(id, fingerprint, 'xgf'))
       fail('ASSET_NOT_FOUND', 'Thumbnail: prepare the IFC first');
-    await this.queue.wait(this.queue.enqueue(id, 'thumbnail', 'xgf').id);
+    await this.queue.wait((await this.queue.enqueue(id, 'thumbnail', 'xgf')).id);
     preview = await this.thumbnails.resolve(id, fingerprint);
     if (!preview) fail('CONVERSION_FAILED', 'Thumbnail could not be verified');
     return preview;
@@ -223,34 +225,35 @@ export class ModelConversionService {
   async close() {
     await this.queue.close();
   }
-  remove(id: string) {
-    this.queue.cancelModel(id);
+  async remove(id: string) {
+    await this.queue.cancelModel(id);
     this.cache.remove(id);
   }
 
   private async prepareIFC(id: string): Promise<ConvertedModel> {
-    const fingerprint = this.fingerprint(this.models.require(id));
+    const fingerprint = await this.fingerprint(await this.models.require(id));
     const cached = await this.cache.get(id, fingerprint, 'xgf');
     if (
       cached &&
       this.cache.readOptions(id, fingerprint) &&
-      (this.properties.info(id).mode !== 'external' ||
-        this.properties.info(id).revision === fingerprint)
+      ((await this.properties.info(id)).mode !== 'external' ||
+        (await this.properties.info(id)).revision === fingerprint)
     )
       return cached;
-    const job = this.queue.enqueue(id, 'prepare-ifc', 'xgf');
+    const job = await this.queue.enqueue(id, 'prepare-ifc', 'xgf');
     await this.queue.wait(job.id);
     const result = await this.cache.get(id, fingerprint, 'xgf');
     if (
       !result ||
-      (this.properties.info(id).mode === 'external' &&
-        (!this.properties.info(id).ready || this.properties.info(id).revision !== fingerprint))
+      ((await this.properties.info(id)).mode === 'external' &&
+        (!(await this.properties.info(id)).ready ||
+          (await this.properties.info(id)).revision !== fingerprint))
     )
       fail('CONVERSION_FAILED', 'Prepare IFC: geometry or property database could not be verified');
     return { ...result, cached: false };
   }
   async formats(id: string): Promise<ModelDownloadFormats> {
-    const model = this.models.require(id);
+    const model = await this.models.require(id);
     if (!model.format || !model.entrypoint || !readable.has(model.format))
       return {
         modelId: id,
@@ -258,11 +261,11 @@ export class ModelConversionService {
         message:
           'The SDK has no configured server-side loader for this source format. Download the original package.',
       };
-    const fingerprint = this.fingerprint(model);
+    const fingerprint = await this.fingerprint(model);
     if (model.format === 'ifc') await this.prepareIFC(id);
     let options = this.cache.readOptions(id, fingerprint);
     if (!options) {
-      await this.queue.wait(this.queue.enqueue(id, 'inspect', '').id);
+      await this.queue.wait((await this.queue.enqueue(id, 'inspect', '')).id);
       options = this.cache.readOptions(id, fingerprint);
     }
     if (!options) fail('CONVERSION_FAILED', 'Inspect model: format options are missing');
@@ -278,7 +281,7 @@ export class ModelConversionService {
     return { modelId: id, formats };
   }
   async availableFormats(id: string): Promise<AvailableModelFormats> {
-    const model = this.models.require(id);
+    const model = await this.models.require(id);
     const result: AvailableModelFormats = { modelId: id, formats: [], warnings: [] };
     if (model.format && model.entrypoint)
       result.formats.push({
@@ -307,26 +310,27 @@ export class ModelConversionService {
         throw error;
       result.warnings.push(error.message);
     }
-    this.models.require(id);
+    await this.models.require(id);
     return result;
   }
-  async resolveDataModelFile(id: string, mode: PropertySetMode = this.properties.info(id).mode) {
+  async resolveDataModelFile(id: string, mode?: PropertySetMode) {
+    mode ??= (await this.properties.info(id)).mode;
     propertyInput(propertyModeSchema, mode);
-    const currentMode = this.properties.info(id).mode;
+    const currentMode = (await this.properties.info(id)).mode;
     if (mode === currentMode)
-      return this.resolveFormatFile(id, 'datamodel', 'model.datamodel.json');
+      return await this.resolveFormatFile(id, 'datamodel', 'model.datamodel.json');
     if (mode !== 'embedded')
       fail(
         'INVALID_MODEL',
         'Properties: enable server storage before requesting external references',
       );
     await this.getFormat(id, 'datamodel');
-    const fingerprint = this.fingerprint(this.models.require(id));
+    const fingerprint = await this.fingerprint(await this.models.require(id));
     const target = PropertyDocumentExport.fingerprint(fingerprint);
     let file = await this.cache.getFile(id, target, 'datamodel', 'model.datamodel.json');
     if (!file) {
-      await this.queue.wait(this.queue.enqueue(id, 'export-properties', 'datamodel').id);
-      this.current(id, fingerprint);
+      await this.queue.wait((await this.queue.enqueue(id, 'export-properties', 'datamodel')).id);
+      await this.current(id, fingerprint);
       file = await this.cache.getFile(id, target, 'datamodel', 'model.datamodel.json');
     }
     if (!file) fail('CONVERSION_FAILED', 'Properties: complete export could not be verified');
@@ -336,7 +340,7 @@ export class ModelConversionService {
     id: string,
     format: ModelRepresentationFormat,
   ): Promise<ModelFormatRepresentation> {
-    const model = this.models.require(id);
+    const model = await this.models.require(id);
     if (model.format === format && model.entrypoint)
       return {
         modelId: id,
@@ -358,7 +362,7 @@ export class ModelConversionService {
   }
   async resolveFormatFile(id: string, format: ModelRepresentationFormat, name: string) {
     relativeFile(this.db.root, name);
-    const model = this.models.require(id);
+    const model = await this.models.require(id);
     if (model.format === format && model.entrypoint) {
       const file = model.files.find((item) => item.path === name);
       if (!file)
@@ -375,11 +379,11 @@ export class ModelConversionService {
     }
     const parsed = z.enum(conversionFormats).safeParse(format);
     if (!parsed.success) fail('UNSUPPORTED_FORMAT', 'Resolve model format: unsupported format');
-    const fingerprint = this.fingerprint(model);
+    const fingerprint = await this.fingerprint(model);
     let file = await this.cache.getFile(id, fingerprint, parsed.data, name);
     if (!file) {
       await this.convert(id, parsed.data);
-      this.current(id, fingerprint);
+      await this.current(id, fingerprint);
       file = await this.cache.getFile(id, fingerprint, parsed.data, name);
     }
     if (!file) fail('CONVERSION_FAILED', 'Resolve model format: output file could not be verified');
@@ -388,11 +392,11 @@ export class ModelConversionService {
   async convert(id: string, format: ConversionFormat): Promise<ConvertedModel> {
     if (!z.enum(conversionFormats).safeParse(format).success)
       fail('UNSUPPORTED_FORMAT', 'Convert model: unsupported output format');
-    const model = this.models.require(id),
-      fingerprint = this.fingerprint(model);
+    const model = await this.models.require(id),
+      fingerprint = await this.fingerprint(model);
     const cached = await this.cache.get(id, fingerprint, format);
     if (cached) return cached;
-    if (model.format === 'ifc' && format === 'xgf') return this.prepareIFC(id);
+    if (model.format === 'ifc' && format === 'xgf') return await this.prepareIFC(id);
     const options = await this.formats(id);
     if (!options.formats.some((option) => option.format === format))
       fail(
@@ -402,15 +406,19 @@ export class ModelConversionService {
     // Preparation may already have published the requested semantic companion.
     const prepared = await this.cache.get(id, fingerprint, format);
     if (prepared) return prepared;
-    await this.queue.wait(this.queue.enqueue(id, 'convert', format).id);
-    this.current(id, fingerprint);
+    await this.queue.wait((await this.queue.enqueue(id, 'convert', format)).id);
+    await this.current(id, fingerprint);
     const result = await this.cache.get(id, fingerprint, format);
     if (!result) fail('CONVERSION_FAILED', 'Convert model: cached output could not be verified');
     return { ...result, cached: false };
   }
   async export(id: string, format: ConversionFormat, outputPath: string) {
     const converted = await this.convert(id, format);
-    const directory = this.cache.directory(id, this.fingerprint(this.models.require(id)), format);
+    const directory = this.cache.directory(
+      id,
+      await this.fingerprint(await this.models.require(id)),
+      format,
+    );
     noLinks(outputPath);
     if (fs.existsSync(outputPath)) fail('CONFLICT', 'Export conversion: output already exists');
     if (converted.files.length === 1)
@@ -436,12 +444,12 @@ export class ModelConversionService {
     signal: AbortSignal,
     report: (progress: ProcessingProgress) => void,
   ) {
-    const model = this.models.require(job.modelId),
-      fingerprint = this.fingerprint(model);
-    const mode = this.properties.info(model.id).mode;
-    const checkJob = () => {
-      this.current(model.id, fingerprint);
-      if (this.queue.repository.get(job.id)?.status !== 'running' || signal.aborted)
+    const model = await this.models.require(job.modelId),
+      fingerprint = await this.fingerprint(model);
+    const mode = (await this.properties.info(model.id)).mode;
+    const checkJob = async () => {
+      await this.current(model.id, fingerprint);
+      if ((await this.queue.repository.get(job.id))?.status !== 'running' || signal.aborted)
         fail('CONVERSION_CANCELLED', 'Conversion cancelled');
     };
     if (job.kind === 'export-properties') {
@@ -456,13 +464,18 @@ export class ModelConversionService {
     if (job.kind === 'prepare-ifc' && !this.cache.has(model.id, fingerprint, 'xgf')) {
       const candidates: { fingerprint: string; mode: PropertySetMode }[] = [
         {
-          fingerprint: this.fingerprint(model, mode === 'external' ? 'embedded' : 'external'),
+          fingerprint: await this.fingerprint(model, mode === 'external' ? 'embedded' : 'external'),
           mode: mode === 'external' ? 'embedded' : 'external',
         },
         ...(previousConverterRevision
           ? [
               {
-                fingerprint: this.fingerprint(model, 'embedded', previousConverterRevision, true),
+                fingerprint: await this.fingerprint(
+                  model,
+                  'embedded',
+                  previousConverterRevision,
+                  true,
+                ),
                 mode: 'embedded' as const,
               },
             ]
@@ -481,8 +494,8 @@ export class ModelConversionService {
       job.kind === 'inspect' ||
       (job.kind === 'prepare-ifc' &&
         mode === 'external' &&
-        (!this.properties.info(model.id).ready ||
-          this.properties.info(model.id).revision !== fingerprint))
+        (!(await this.properties.info(model.id)).ready ||
+          (await this.properties.info(model.id)).revision !== fingerprint))
         ? null
         : await this.cache.get(model.id, fingerprint, format);
     const thumbnailOnly =
@@ -521,9 +534,9 @@ export class ModelConversionService {
         }));
     const stage = await stageConversion(files, signal);
     try {
-      const check = () => {
-        this.current(model.id, fingerprint);
-        if (this.queue.repository.get(job.id)?.status !== 'running')
+      const check = async () => {
+        await this.current(model.id, fingerprint);
+        if ((await this.queue.repository.get(job.id))?.status !== 'running')
           fail('CONVERSION_CANCELLED', 'Conversion cancelled');
       };
       if (format === 'datamodel' && canonical) {
@@ -550,7 +563,14 @@ export class ModelConversionService {
           propertyModelId: model.id,
           propertyRevision: fingerprint,
           ...(canonical && mode === 'external'
-            ? { propertyDatabaseFile: this.properties.file(model.id, fingerprint) }
+            ? {
+                propertyDatabaseFile: await this.properties.file(
+                  model.id,
+                  fingerprint,
+                  stage.root,
+                  signal,
+                ),
+              }
             : {}),
           sourceFormat: canonical ? 'xgf' : model.format!,
           entrypoint: relativeFile(stage.input, canonical ? 'model.xgf' : model.entrypoint!),
@@ -573,9 +593,10 @@ export class ModelConversionService {
           model.id,
           fingerprint,
           relativeFile(stage.output, name),
-          (commit) =>
-            this.db.transaction(() => {
-              check();
+          async (commit) =>
+            await this.db.transaction(async () => {
+              await this.db.lock('model:' + model.id);
+              await check();
               if (signal.aborted) fail('CONVERSION_CANCELLED', 'Thumbnail cancelled');
               commit();
             }),
@@ -591,8 +612,9 @@ export class ModelConversionService {
       }
       if (job.kind === 'inspect') {
         const options = this.checked(optionsSchema, result);
-        this.db.transaction(() => {
-          check();
+        await this.db.transaction(async () => {
+          await this.db.lock('model:' + model.id);
+          await check();
           if (signal.aborted) fail('CONVERSION_CANCELLED', 'Conversion cancelled');
           this.cache.writeOptions(model.id, fingerprint, options);
         });
@@ -617,8 +639,8 @@ export class ModelConversionService {
           stage.output,
           signal,
           check,
-          () => {
-            propertyInstall?.commit();
+          async () => {
+            await propertyInstall?.commit();
             if (output.options) this.cache.writeOptions(model.id, fingerprint, output.options);
           },
         );

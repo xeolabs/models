@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { Client } from 'pg';
 import { ModelsLibrary } from '@xeokit/models';
 import {
   ServerModelsClient,
@@ -8,7 +10,15 @@ import {
 
 if (!ModelsLibrary || !ServerModelsClient || !ServerPropertiesClient || !ExternalPropertyLoader)
   throw new Error('Missing public exports');
-const library = await ModelsLibrary.open({ root: './catalog', create: true });
+const connectionString = process.env.MODELS_TEST_DATABASE_URL;
+if (!connectionString)
+  throw new Error('Set MODELS_TEST_DATABASE_URL to a disposable PostgreSQL database');
+const schema = 'test_' + randomUUID().replaceAll('-', '');
+const library = await ModelsLibrary.open({
+  root: './catalog',
+  create: true,
+  database: { connectionString, schema },
+});
 try {
   fs.writeFileSync('triangle.obj', 'v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n');
   const model = (await library.importFile({ path: 'triangle.obj' })).model;
@@ -37,5 +47,12 @@ try {
     throw new Error('Installed GLB conversion failed');
 } finally {
   await library.close();
+  const admin = new Client({ connectionString });
+  await admin.connect();
+  try {
+    await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
+  } finally {
+    await admin.end();
+  }
 }
 console.log('Installed Node and browser APIs, format discovery and SDK conversions passed');

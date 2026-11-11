@@ -21,6 +21,7 @@ export interface ModelRecord {
   updatedAt: string;
 }
 export interface OpenLibraryOptions {
+  database?: import('../storage/PostgresDatabase.js').PostgresOptions;
   processingWorker?: boolean;
   xeoIFC?: import('../conversion/XeoIFCRuntime.js').XeoIFCOptions;
   root: string;

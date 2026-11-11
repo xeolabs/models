@@ -61,7 +61,7 @@ export class ModelsLibrary {
   ) {
     this.repository = new ModelRepository(db);
     this.properties = new ModelPropertyStore(db);
-    this.properties.recoverDeletedModels();
+
     this.assets = new AssetStore(db);
     this.conversions = new ModelConversionService(
       db,
@@ -71,14 +71,19 @@ export class ModelsLibrary {
       options.processingWorker,
       this.properties,
     );
-    this.importer = new Importer(this.repository, this.assets, (model) =>
-      this.conversions.imported(model),
+    this.importer = new Importer(
+      this.repository,
+      this.assets,
+      async (model, mode) => await this.conversions.imported(model, mode),
     );
   }
   static async open(options: OpenLibraryOptions) {
+    let db: Database | undefined;
     try {
-      return new ModelsLibrary(new Database(path.resolve(options.root), options.create), options);
+      db = await Database.open(path.resolve(options.root), options.create, options.database);
+      return new ModelsLibrary(db, options);
     } catch (e) {
+      await db?.close();
       throw wrap(e, 'Open models library');
     }
   }
@@ -96,7 +101,7 @@ export class ModelsLibrary {
   }
 
   /**
-   * Finish operations already accepted before closing the SQLite connection.
+   * Finish operations already accepted before closing the PostgreSQL pool.
    */
   async close(): Promise<void> {
     if (this.closeTask) return this.closeTask;
@@ -105,7 +110,7 @@ export class ModelsLibrary {
       await this.conversions.close();
       await Promise.allSettled([...this.pending]);
       await this.acquisitionService?.close();
-      this.db.sql.close();
+      await this.db.close();
       this.closed = true;
     })());
   }
@@ -114,92 +119,95 @@ export class ModelsLibrary {
       this.acquisitionService ??= new ModelAcquisitionService(
         this.db,
         async (manifest, before, after) =>
-          this.db.transaction(() => this.importer.manifest(manifest, false, before, after).model!),
-        (id) => this.repository.get(id),
+          (await this.importer.manifest(manifest, false, before, after)).model!,
+        async (id) => await this.repository.get(id),
         async () => {
           if (this.closed) fail('LIBRARY_CLOSED', 'Models library is closed');
         },
         options,
       );
-      return this.acquisitionService;
+      return this.acquisitionService.initialize();
     });
   }
   async create(input: { metadata: unknown }) {
-    return this.use(() =>
-      this.db.transaction(() => {
-        const model = this.repository.create(input.metadata);
-        this.properties.initialize(
-          model.id,
-          this.conversions.settings().propertySetMode ?? 'embedded',
-        );
-        return model;
-      }),
+    return this.use(
+      async () =>
+        await this.db.transaction(async () => {
+          const model = await this.repository.create(input.metadata);
+          await this.properties.initialize(
+            model.id,
+            (await this.conversions.settings()).propertySetMode ?? 'embedded',
+          );
+          return model;
+        }),
     );
   }
   async get(id: string) {
-    return this.use(() => this.repository.get(id));
+    return this.use(async () => await this.repository.get(id));
   }
   async list(query: ModelQuery = {}) {
-    return this.use(() => this.repository.list(query).items);
+    return this.use(async () => (await this.repository.list(query)).items);
   }
   async search(query: ModelQuery | string = {}) {
     return this.list(typeof query === 'string' ? { text: query } : query);
   }
   async page(query: ModelQuery = {}) {
-    return this.use(() => this.repository.list(query));
+    return this.use(async () => await this.repository.list(query));
   }
   async update(id: string, patch: { metadata: Partial<Metadata> }) {
-    return this.use(() => {
+    return this.use(async () => {
       if (Object.keys(patch).some((k) => k !== 'metadata'))
         fail('INVALID_MODEL', 'Update model: only metadata may change');
-      return this.db.transaction(() => this.repository.update(id, patch.metadata));
+      return await this.db.transaction(
+        async () => await this.repository.update(id, patch.metadata),
+      );
     });
   }
   async delete(id: string) {
-    return this.use(() => {
-      this.db.transaction(() => {
-        this.repository.require(id);
-        this.conversions.remove(id);
-        this.repository.delete(id);
+    return this.use(async () => {
+      await this.db.transaction(async () => {
+        await this.db.lock('model:' + id);
+        await this.repository.require(id);
+        await this.conversions.remove(id);
+        await this.repository.delete(id);
       });
       // A later startup also removes this directory if deletion is interrupted.
-      this.properties.remove(id);
+      await this.properties.remove(id);
     });
   }
   async listTags() {
-    return this.use(() => this.repository.listTags());
+    return this.use(async () => await this.repository.listTags());
   }
   async addTags(id: string, tags: string[]) {
-    return this.use(() =>
-      this.db.transaction(() => {
-        const m = this.repository.require(id);
-        return this.repository.update(id, {
-          tags: [...m.metadata.tags, ...parse(tagsSchema, tags)],
-        });
-      }),
+    return this.use(
+      async () =>
+        await this.db.transaction(async () => {
+          await this.db.lock('model:' + id);
+          const m = await this.repository.require(id);
+          return await this.repository.update(id, {
+            tags: [...m.metadata.tags, ...parse(tagsSchema, tags)],
+          });
+        }),
     );
   }
   async removeTags(id: string, tags: string[]) {
-    return this.use(() =>
-      this.db.transaction(() => {
-        const remove = parse(tagsSchema, tags),
-          m = this.repository.require(id);
-        return this.repository.update(id, {
-          tags: m.metadata.tags.filter((t) => !remove.includes(t)),
-        });
-      }),
+    return this.use(
+      async () =>
+        await this.db.transaction(async () => {
+          await this.db.lock('model:' + id);
+          const remove = parse(tagsSchema, tags),
+            m = await this.repository.require(id);
+          return await this.repository.update(id, {
+            tags: m.metadata.tags.filter((t) => !remove.includes(t)),
+          });
+        }),
     );
   }
   async importFile(input: ImportOptions) {
-    return this.use(() => {
+    return this.use(async () => {
       if (input.propertySetMode !== undefined)
         propertyInput(propertyModeSchema, input.propertySetMode);
-      return this.db.transaction(() => {
-        const report = this.importer.file(input);
-        if (report.model && input.propertySetMode)
-          this.properties.setMode(report.model.id, input.propertySetMode);
-        return report;
-      });
+      return await this.importer.file(input);
     });
   }
   async importDirectory(input: ImportOptions & { entrypoint: string }) {
@@ -209,38 +217,31 @@ export class ModelsLibrary {
     });
   }
   async importManifest(input: { manifestPath: string; dryRun?: boolean }) {
-    return this.use(() =>
-      this.db.transaction(() =>
-        this.importer.manifest(path.resolve(input.manifestPath), input.dryRun),
-      ),
-    );
+    return this.use(() => this.importer.manifest(path.resolve(input.manifestPath), input.dryRun));
   }
   async importBundle(input: { path: string; dryRun?: boolean }) {
     return this.use(async () => {
       const root = await extractBundle(input.path);
       try {
-        return this.db.transaction(() =>
-          this.importer.manifest(path.join(root, 'manifest.json'), input.dryRun),
-        );
+        return await this.importer.manifest(path.join(root, 'manifest.json'), input.dryRun);
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
     });
   }
   async getAsset(id: string) {
-    return this.use(() => {
+    return this.use(async () => {
       this.assets.path(id);
-      const r = this.db.sql
-        .prepare(
-          'SELECT id,bytes,mime,original_filename originalFilename,imported_at importedAt FROM assets WHERE id=?',
-        )
-        .get(id);
+      const r = await this.db.one(
+        'SELECT id,bytes,mime,original_filename "originalFilename",imported_at "importedAt" FROM assets WHERE id=$1',
+        [id],
+      );
       return r ?? null;
     });
   }
   async resolveAsset(id: string) {
-    return this.use(() => {
-      if (!this.db.sql.prepare('SELECT id FROM assets WHERE id=?').get(id))
+    return this.use(async () => {
+      if (!(await this.db.one('SELECT id FROM assets WHERE id=$1', [id])))
         fail('ASSET_NOT_FOUND', 'Asset does not exist');
       const file = this.assets.path(id);
       if (!fs.existsSync(file)) fail('ASSET_NOT_FOUND', 'Asset binary is missing');
@@ -248,8 +249,8 @@ export class ModelsLibrary {
     });
   }
   async resolveFile(id: string, name: string) {
-    return this.use(() => {
-      const model = this.repository.require(id);
+    return this.use(async () => {
+      const model = await this.repository.require(id);
       relativeFile(this.db.root, name);
       const file = model.files.find((f) => f.path === name);
       if (!file) fail('ASSET_NOT_FOUND', 'Model package does not contain ' + name);
@@ -258,7 +259,7 @@ export class ModelsLibrary {
   }
   async exportModel(input: { modelId: string; outputPath: string }) {
     return this.use(async () => {
-      const model = this.repository.require(input.modelId);
+      const model = await this.repository.require(input.modelId);
       if (!model.entrypoint) fail('INVALID_MODEL', 'Export model: no entrypoint');
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'models-export-'));
       try {
@@ -286,101 +287,106 @@ export class ModelsLibrary {
    * Discover compatible formats. IFC preparation caches its reusable XGF and DataModel.
    */
   async availableFormats(modelId: string) {
-    return this.use(() => this.conversions.availableFormats(modelId));
+    return this.use(async () => await this.conversions.availableFormats(modelId));
   }
 
   /**
    * Prepare a requested format, reusing its cached files when available.
    */
   async getFormat(modelId: string, format: ModelRepresentationFormat) {
-    return this.use(() => this.conversions.getFormat(modelId, format));
+    return this.use(async () => await this.conversions.getFormat(modelId, format));
   }
   async resolveFormatFile(modelId: string, format: ModelRepresentationFormat, name: string) {
-    return this.use(() => this.conversions.resolveFormatFile(modelId, format, name));
+    return this.use(async () => await this.conversions.resolveFormatFile(modelId, format, name));
   }
   async downloadFormats(modelId: string) {
-    return this.use(() => this.conversions.formats(modelId));
+    return this.use(async () => await this.conversions.formats(modelId));
   }
   async convertModel(input: { modelId: string; format: ConversionFormat }) {
-    return this.use(() => this.conversions.convert(input.modelId, input.format));
+    return this.use(async () => await this.conversions.convert(input.modelId, input.format));
   }
   async exportConvertedModel(input: {
     modelId: string;
     format: ConversionFormat;
     outputPath: string;
   }) {
-    return this.use(() =>
-      this.conversions.export(input.modelId, input.format, path.resolve(input.outputPath)),
+    return this.use(
+      async () =>
+        await this.conversions.export(input.modelId, input.format, path.resolve(input.outputPath)),
     );
   }
   async thumbnailStatus(modelId: string) {
-    return this.use(() => this.conversions.thumbnailStatus(modelId));
+    return this.use(async () => await this.conversions.thumbnailStatus(modelId));
   }
   async resolveThumbnail(modelId: string) {
-    return this.use(() => this.conversions.resolveThumbnail(modelId));
+    return this.use(async () => await this.conversions.resolveThumbnail(modelId));
   }
   async resolveDataModelFile(modelId: string, options: { propertySetMode?: PropertySetMode } = {}) {
-    return this.use(() => this.conversions.resolveDataModelFile(modelId, options.propertySetMode));
+    return this.use(
+      async () => await this.conversions.resolveDataModelFile(modelId, options.propertySetMode),
+    );
   }
   async propertiesInfo(modelId: string) {
-    return this.use(() => this.properties.info(modelId));
+    return this.use(async () => await this.properties.info(modelId));
   }
   async configureProperties(modelId: string, options: { mode: PropertySetMode }) {
-    return this.use(() => this.conversions.configureProperties(modelId, options.mode));
+    return this.use(async () => await this.conversions.configureProperties(modelId, options.mode));
   }
   async getPropertySets(modelId: string, query: PropertySetQuery) {
-    return this.use(() => {
+    return this.use(async () => {
       const input = propertyInput(propertySetQuerySchema, query);
-      return this.properties.reader(modelId, input.revision).sets(input);
+      return (await this.properties.reader(modelId, input.revision)).sets(input);
     });
   }
   async getObjectProperties(modelId: string, query: ObjectPropertiesQuery) {
-    return this.use(() => {
+    return this.use(async () => {
       const input = propertyInput(objectPropertiesQuerySchema, query);
-      return this.properties.reader(modelId, input.revision).objects(input);
+      return (await this.properties.reader(modelId, input.revision)).objects(input);
     });
   }
   async queryPropertyObjects(modelId: string, query: PropertyObjectQuery) {
-    return this.use(() => {
+    return this.use(async () => {
       const input = propertyInput(propertyObjectQuerySchema, query);
-      return this.properties.reader(modelId, input.revision).queryObjects(input);
+      return (await this.properties.reader(modelId, input.revision)).queryObjects(input);
     });
   }
   async processing(modelId?: string) {
-    return this.use(() => this.conversions.processing(modelId));
+    return this.use(async () => await this.conversions.processing(modelId));
   }
   async processingSettings() {
-    return this.use(() => this.conversions.settings());
+    return this.use(async () => await this.conversions.settings());
   }
   async configureProcessing(patch: Partial<ProcessingSettings>) {
-    return this.use(() => this.conversions.configure(patch));
+    return this.use(async () => await this.conversions.configure(patch));
   }
   async prepareIFC(modelId: string) {
-    return this.use(() => this.conversions.scheduleIFC(modelId));
+    return this.use(async () => await this.conversions.scheduleIFC(modelId));
   }
   async cancelConversion(jobId: string) {
-    return this.use(() => this.conversions.cancelJob(jobId));
+    return this.use(async () => await this.conversions.cancelJob(jobId));
   }
   async retryConversion(jobId: string) {
-    return this.use(() => this.conversions.retryJob(jobId));
+    return this.use(async () => await this.conversions.retryJob(jobId));
   }
   async summary() {
-    return this.use(() => ({
-      id: this.db.sql.prepare('SELECT id FROM library_info').get()!.id,
+    return this.use(async () => ({
+      id: (await this.db.one('SELECT id FROM library_info', []))!.id,
       name: path.basename(this.db.root),
-      modelCount: this.db.sql.prepare('SELECT count(*) n FROM models').get()!.n,
-      providers: this.db.sql
-        .prepare(
-          "SELECT DISTINCT json_extract(source_json,'$.provider') provider FROM models WHERE json_extract(source_json,'$.provider') IS NOT NULL ORDER BY provider",
+      modelCount: (await this.db.one('SELECT count(*) n FROM models', []))!.n,
+      providers: (
+        await this.db.all(
+          "SELECT DISTINCT (source_json::json->>'provider') provider FROM models WHERE (source_json::json->>'provider') IS NOT NULL ORDER BY provider",
+          [],
         )
-        .all()
-        .map((r) => r.provider),
+      ).map((r) => r.provider),
     }));
   }
   async validate() {
-    return this.use(() => new Maintenance(this.db, this.assets).validate());
+    return this.use(async () => await new Maintenance(this.db, this.assets).validate());
   }
   async gc(options: { dryRun?: boolean } = {}) {
-    return this.use(() => new Maintenance(this.db, this.assets).gc(options.dryRun !== false));
+    return this.use(
+      async () => await new Maintenance(this.db, this.assets).gc(options.dryRun !== false),
+    );
   }
 }

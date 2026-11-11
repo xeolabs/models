@@ -1,6 +1,6 @@
 # TypeScript API
 
-`ModelsLibrary.open({root, create?})` opens or initializes a catalog. All public methods return promises. Call `close()` in `finally`; closed libraries reject new work and wait for accepted operations before closing SQLite.
+`ModelsLibrary.open({root, create?, database?})` opens or initializes a catalog. All public methods return promises. Call `close()` in `finally`; closed libraries reject new work and wait for accepted operations before closing PostgreSQL.
 
 | Area        | Methods                                                                                                                                                              |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -19,7 +19,7 @@ The acquisition service exposes `search`, `getModel`, `getDownloads`, `createPla
 
 Plan criteria include providers, explicit assets or queries, `resolution` or `resolutions` (array or `all`), format, model count, total-byte budget, optional `maxPackageBytes` and `maxPolygons`. Plans persist exact filenames, package paths, sizes, checksums and licenses, with a canonical SHA-256 fingerprint. They cannot be updated. Unknown sizes require an explicit conservative reservation policy. Existing acquisitions are skipped unless forced.
 
-The browser export contains only `ServerModelsClient`. Its `open`, `search`, `get`, `fileUrl`, `entryUrl`, `bundleUrl`, `downloadFormats` and `conversionDownloadUrl` use the server; it neither opens SQLite nor creates GPU objects. The server also serves this module at `/models-client.js` for direct browser imports.
+The browser export contains only `ServerModelsClient`. Its `open`, `search`, `get`, `fileUrl`, `entryUrl`, `bundleUrl`, `downloadFormats` and `conversionDownloadUrl` use the server; it neither opens PostgreSQL nor creates GPU objects. The server also serves this module at `/models-client.js` for direct browser imports.
 
 Public failures use `ModelsError` with a stable `code` and preserved underlying cause. HTTP/CLI JSON uses `{ok:true,data}` or `{ok:false,error:{code,message}}`.
 
@@ -221,3 +221,30 @@ returns verified shard bytes and geometry IDs for the SDK's pure
 no renderer or second geometry database is required. See
 [scene geometry](scene-assets.md) for the complete resolver example and revision
 availability rules.
+
+## PostgreSQL configuration and migration
+
+The Node API accepts server-only connection options. Browsers continue to use the
+HTTP client and receive neither SQL access nor database credentials.
+
+```ts
+import { ModelsLibrary, migrateSqliteLibrary } from '@xeokit/models';
+
+const database = {
+  connectionString: process.env.MODELS_DATABASE_URL!,
+  schema: 'models',
+  maxConnections: 5,
+};
+const library = await ModelsLibrary.open({ root: './my-models', create: true, database });
+try {
+  console.log(await library.page({ limit: 20 }));
+} finally {
+  await library.close();
+}
+```
+
+`migrateSqliteLibrary({root, database})` imports a **stopped** legacy schema-3 library
+into an absent PostgreSQL schema and returns its library ID, schema and verified row
+counts. It preserves the source and does not activate the new database. Use the CLI
+`migrate-postgres --activate` for the complete migration and binding workflow.
+See [operations](postgresql-operations.md) for backup, cutover and rollback.

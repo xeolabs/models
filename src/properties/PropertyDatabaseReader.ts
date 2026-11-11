@@ -1,6 +1,5 @@
-import { DatabaseSync } from 'node:sqlite';
+import { Database } from '../storage/Database.js';
 import { createHash } from 'node:crypto';
-import { noLinks } from '../storage/paths.js';
 import { fail } from '../domain/ModelsError.js';
 import { PROPERTY_LIMITS } from './schema.js';
 import type {
@@ -14,55 +13,88 @@ import type {
 } from './types.js';
 
 /**
- * Opens a published database read-only for a bounded query, then closes it.
- * No long-lived connection prevents a deleted model's files from being removed.
+ * Reads a bounded page from the current PostgreSQL property generation.
+ * Model and revision filters prevent values leaking between models.
  */
 export class PropertyDatabaseReader {
   constructor(
-    private readonly file: string,
+    private readonly db: Database,
+    private readonly modelId: string,
     readonly revision: string,
   ) {}
-  private read<T>(work: (db: DatabaseSync) => T): T {
-    noLinks(this.file);
-    const db = new DatabaseSync(this.file, { readOnly: true });
-    try {
-      if (
-        db.prepare('PRAGMA user_version').get()?.user_version !== 1 ||
-        db.prepare('SELECT revision FROM info').get()?.revision !== this.revision
-      )
-        fail('DATABASE_ERROR', 'Properties: database generation does not match its registration');
-      return work(db);
-    } finally {
-      db.close();
-    }
+
+  /**
+   * Keep publication and deletion outside this bounded read transaction.
+   */
+  async assertCurrent(): Promise<void> {
+    const row = await this.db.one(
+      'SELECT p.mode,p.revision,g.complete FROM model_properties p LEFT JOIN property_generations g ON g.model_id=p.model_id AND g.revision=p.revision WHERE p.model_id=$1 FOR SHARE OF p',
+      [this.modelId],
+    );
+    if (!row) fail('MODEL_NOT_FOUND', 'Properties: model does not exist');
+    if (row.mode !== 'external' || !row.complete)
+      fail('PROPERTIES_NOT_READY', 'Properties: prepare this model first');
+    if (row.revision !== this.revision)
+      fail(
+        'PROPERTY_REVISION_MISMATCH',
+        'Properties: reload the model before requesting a different revision',
+      );
   }
-  sets(query: PropertySetQuery): PropertySetPage {
-    return this.read((db) => {
+  private async read<T>(work: (db: Database) => Promise<T>): Promise<T> {
+    return this.db.transaction(async () => {
+      await this.assertCurrent();
+      return work(this.db);
+    });
+  }
+  async sets(query: PropertySetQuery): Promise<PropertySetPage> {
+    return this.read(async (db) => {
       const ids = [...new Set(query.ids)];
       const start = query.cursor ?? 0;
       if (start > ids.length)
         fail('INVALID_PROPERTY_QUERY', 'Properties: cursor is outside this request');
       const result: PropertySetPage = { revision: this.revision, propertySets: [], missingIds: [] };
       let bytes = 0;
-      const select = db.prepare('SELECT json,bytes FROM property_sets WHERE id=?');
+
+      // Read sizes first, then fetch only the JSON that fits this response.
+      // A batch of 128 large sets must not allocate hundreds of megabytes.
+      const sizes = await db.all(
+        `SELECT id,bytes FROM property_sets WHERE model_id=$1 AND revision=$2
+         AND id_key=ANY(SELECT property_key(value) FROM unnest($3::text[]) value)
+         AND id=ANY($3::text[])`,
+        [this.modelId, this.revision, ids.slice(start)],
+      );
+      const byId = new Map(sizes.map((row) => [row.id as string, Number(row.bytes)]));
+      const selected: string[] = [];
       for (let i = start; i < ids.length; i++) {
-        const row = select.get(ids[i]);
-        if (!row) {
+        const size = byId.get(ids[i]);
+        if (size === undefined) {
           result.missingIds.push(ids[i]);
           continue;
         }
-        if (bytes + Number(row.bytes) > PROPERTY_LIMITS.responseBytes) {
+        if (bytes + size > PROPERTY_LIMITS.responseBytes) {
           result.nextCursor = i;
           break;
         }
-        bytes += Number(row.bytes);
-        result.propertySets.push(JSON.parse(row.json as string) as ModelPropertySet);
+        bytes += size;
+        selected.push(ids[i]);
+      }
+      if (selected.length) {
+        const rows = await db.all(
+          `SELECT id,json FROM property_sets WHERE model_id=$1 AND revision=$2
+           AND id_key=ANY(SELECT property_key(value) FROM unnest($3::text[]) value)
+           AND id=ANY($3::text[])`,
+          [this.modelId, this.revision, selected],
+        );
+        const values = new Map(
+          rows.map((row) => [row.id, JSON.parse(row.json as string) as ModelPropertySet]),
+        );
+        result.propertySets = selected.map((id) => values.get(id)!);
       }
       return result;
     });
   }
-  objects(query: ObjectPropertiesQuery): ObjectPropertiesPage {
-    return this.read((db) => {
+  async objects(query: ObjectPropertiesQuery): Promise<ObjectPropertiesPage> {
+    return this.read(async (db) => {
       const ids = [...new Set(query.objectIds)];
       const identity = createHash('sha256')
         .update(JSON.stringify([this.revision, ids]))
@@ -95,16 +127,20 @@ export class PropertyDatabaseReader {
       let count = 0;
       for (; index < ids.length; index++, ordinal = 0) {
         const id = ids[index];
-        if (!db.prepare('SELECT id FROM objects WHERE id=?').get(id)) {
+        if (
+          !(await db.one(
+            'SELECT id FROM property_objects WHERE model_id=$1 AND revision=$2 AND id_key=property_key($3) AND id=$3',
+            [this.modelId, this.revision, id],
+          ))
+        ) {
           result.missingObjectIds.push(id);
           continue;
         }
         const remaining = PROPERTY_LIMITS.references - count;
-        const rows = db
-          .prepare(
-            'SELECT set_id FROM object_sets WHERE object_id=? AND ordinal>=? ORDER BY ordinal LIMIT ?',
-          )
-          .all(id, ordinal, remaining + 1);
+        const rows = await db.all(
+          'SELECT set_id FROM object_sets WHERE model_id=$1 AND revision=$2 AND object_key=property_key($3) AND object_id=$3 AND ordinal>=$4 ORDER BY ordinal LIMIT $5',
+          [this.modelId, this.revision, id, ordinal, remaining + 1],
+        );
         const taken = rows.slice(0, remaining);
         result.objects.push({ id, propertySetIds: taken.map((row) => row.set_id as string) });
         count += taken.length;
@@ -118,23 +154,25 @@ export class PropertyDatabaseReader {
       return result;
     });
   }
-  queryObjects(query: PropertyObjectQuery): PropertyObjectPage {
-    return this.read((db) => {
+  async queryObjects(query: PropertyObjectQuery): Promise<PropertyObjectPage> {
+    return this.read(async (db) => {
       const limit = query.limit ?? 100;
-      const rows = db
-        .prepare(
-          `SELECT DISTINCT refs.object_id id FROM property_values p
-        JOIN property_sets sets ON sets.id=p.set_id JOIN object_sets refs ON refs.set_id=p.set_id
-        WHERE p.name=? AND p.value_json=? AND refs.object_id>?
-        ${query.propertySetName === undefined ? '' : 'AND sets.name=?'} ORDER BY refs.object_id LIMIT ?`,
-        )
-        .all(
+      const rows = await db.all(
+        `SELECT DISTINCT refs.object_id id FROM property_values p
+        JOIN property_sets sets ON (sets.model_id,sets.revision,sets.id_key)=(p.model_id,p.revision,p.set_key) AND sets.id=p.set_id
+        JOIN object_sets refs ON (refs.model_id,refs.revision,refs.set_key)=(p.model_id,p.revision,p.set_key) AND refs.set_id=p.set_id
+        WHERE p.model_id=$1 AND p.revision=$2 AND md5(p.name)=md5($3) AND p.name=$3 AND md5(p.value_json)=md5($4) AND p.value_json=$4 AND refs.object_id>$5
+        AND ($6::text IS NULL OR sets.name=$6) ORDER BY refs.object_id LIMIT $7`,
+        [
+          this.modelId,
+          this.revision,
           query.propertyName,
           JSON.stringify(query.value),
           query.after ?? '',
-          ...(query.propertySetName === undefined ? [] : [query.propertySetName]),
+          query.propertySetName ?? null,
           limit + 1,
-        );
+        ],
+      );
       const objectIds = rows.slice(0, limit).map((row) => row.id as string);
       return {
         revision: this.revision,

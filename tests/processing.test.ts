@@ -200,7 +200,7 @@ test('another library connection can cancel running work without publishing part
   }
 });
 
-test('SQLite claims serialize workers across connections, prioritize requests and preserve live owners', async () => {
+test('PostgreSQL claims serialize workers across connections, prioritize requests and preserve live owners', async () => {
   const f = await fixture();
   const db = new Database(f.directory),
     other = new Database(f.directory);
@@ -209,25 +209,35 @@ test('SQLite claims serialize workers across connections, prioritize requests an
   try {
     const first = await f.library.create({ metadata: { name: 'Automatic' } }),
       next = await f.library.create({ metadata: { name: 'Requested' } });
-    repo.configure({ automaticIFC: true });
-    const auto = db.transaction(() => repo.enqueue(first.id, 'prepare-ifc', 'xgf', 'automatic'));
-    const manual = db.transaction(() => repo.enqueue(next.id, 'prepare-ifc', 'xgf', 'requested'));
-    expect(repo.claim()?.id).toBe(manual.id);
-    expect(second.claim()).toBeNull();
-    expect(second.get(manual.id)?.status).toBe('running');
-    second.cancel(manual.id);
-    expect(repo.get(manual.id)?.status).toBe('cancelling');
-    repo.finish(manual.id, 'cancelled');
-    expect(second.claim()?.id).toBe(auto.id);
-    db.sql
-      .prepare('UPDATE processing_jobs SET owner_json=? WHERE id=?')
-      .run(JSON.stringify({ ...second.owner, pid: 99999999 }), auto.id);
-    expect(repo.claim()).toBeNull();
-    expect(repo.get(auto.id)?.status).toBe('interrupted');
-    expect(db.sql.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    await repo.configure({ automaticIFC: true });
+    const auto = await db.transaction(
+      async () => await repo.enqueue(first.id, 'prepare-ifc', 'xgf', 'automatic'),
+    );
+    const manual = await db.transaction(
+      async () => await repo.enqueue(next.id, 'prepare-ifc', 'xgf', 'requested'),
+    );
+    expect((await repo.claim())?.id).toBe(manual.id);
+    expect(await second.claim()).toBeNull();
+    expect((await second.get(manual.id))?.status).toBe('running');
+    await second.cancel(manual.id);
+    expect((await repo.get(manual.id))?.status).toBe('cancelling');
+    await repo.finish(manual.id, 'cancelled');
+    expect((await second.claim())?.id).toBe(auto.id);
+    await db.query('UPDATE processing_jobs SET owner_json=$1 WHERE id=$2', [
+      JSON.stringify({ ...second.owner, pid: 99999999 }),
+      auto.id,
+    ]);
+    expect(await repo.claim()).toBeNull();
+    expect((await repo.get(auto.id))?.status).toBe('interrupted');
+    expect(
+      (await db.one(
+        "SELECT count(*) n FROM pg_constraint WHERE contype='f' AND NOT convalidated AND connamespace=$1::regnamespace",
+        [db.schema],
+      ))!.n,
+    ).toBe(0);
   } finally {
-    db.sql.close();
-    other.sql.close();
+    await db.close();
+    await other.close();
     await f.close();
   }
 });
@@ -292,14 +302,14 @@ test('closing an active service interrupts its work and leaves pending jobs for 
   });
   try {
     const model = await f.library.create({ metadata: { name: 'Model' } });
-    const job = queue.enqueue(model.id, 'convert', 'glb');
-    await vi.waitFor(() => expect(repo.get(job.id)?.status).toBe('running'));
+    const job = await queue.enqueue(model.id, 'convert', 'glb');
+    await vi.waitFor(async () => expect((await repo.get(job.id))?.status).toBe('running'));
     await queue.close();
-    expect(repo.get(job.id)?.status).toBe('interrupted');
+    expect((await repo.get(job.id))?.status).toBe('interrupted');
     await expect(queue.wait(job.id)).rejects.toMatchObject({ code: 'CONVERSION_CANCELLED' });
   } finally {
     await queue.close();
-    db.sql.close();
+    await db.close();
     await f.close();
   }
 });

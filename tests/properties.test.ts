@@ -25,7 +25,7 @@ async function propertyFixture() {
   const model = await f.library.create({ metadata: { name: 'Property test' } });
   const db = new Database(f.directory);
   const store = new ModelPropertyStore(db);
-  store.setMode(model.id, 'external');
+  await store.setMode(model.id, 'external');
   const file = path.join(f.root, 'properties.db');
   const writer = new PropertyDatabaseWriter(file, model.id, revision);
   await writer.writeObject('wall', [set]);
@@ -38,7 +38,7 @@ async function propertyFixture() {
     file,
     new AbortController().signal,
   );
-  db.transaction(() => installation.commit());
+  await db.transaction(async () => await installation.commit());
   await installation.cleanup();
   return {
     ...f,
@@ -46,7 +46,7 @@ async function propertyFixture() {
     db,
     store,
     async close() {
-      db.sql.close();
+      await db.close();
       await f.close();
     },
   };
@@ -103,7 +103,7 @@ test('published sets retain native values, shared IDs, typed queries and missing
     ).rejects.toMatchObject({ code: 'INVALID_PROPERTY_QUERY' });
     await f.library.delete(f.model.id);
     expect(fs.existsSync(path.join(f.directory, 'properties', f.model.id))).toBe(false);
-    expect(f.db.sql.prepare('SELECT * FROM model_properties').all()).toEqual([]);
+    expect(await f.db.all('SELECT * FROM model_properties', [])).toEqual([]);
     await expect(
       f.library.getPropertySets(f.model.id, { revision, ids: [set.id] }),
     ).rejects.toMatchObject({ code: 'MODEL_NOT_FOUND' });

@@ -11,8 +11,8 @@ export interface MetadataCacheEntry {
   lastModified?: string;
 }
 export interface MetadataCache {
-  get(key: string): MetadataCacheEntry | undefined;
-  set(key: string, value: MetadataCacheEntry): void;
+  get(key: string): MetadataCacheEntry | undefined | Promise<MetadataCacheEntry | undefined>;
+  set(key: string, value: MetadataCacheEntry): void | Promise<void>;
 }
 export interface ProviderHttpOptions {
   userAgent?: string;
@@ -260,7 +260,7 @@ export class ProviderHttpClient {
     maximumBytes: number,
   ): Promise<unknown> {
     const key = provider + ':' + kind + ':' + maximumBytes + ':' + url;
-    const cached = this.options.cache?.get(key) ?? this.memory.get(key);
+    const cached = (await this.options.cache?.get(key)) ?? this.memory.get(key);
     if (!this.fresh && cached && Date.now() - cached.storedAt < 86400000)
       return structuredClone(cached.value);
     const headers: Record<string, string> = {
@@ -302,7 +302,7 @@ export class ProviderHttpClient {
           lastModified: response.headers['last-modified'] ?? cached?.lastModified,
         };
         this.memory.set(key, entry);
-        this.options.cache?.set(key, entry);
+        await this.options.cache?.set(key, entry);
         return structuredClone(value);
       },
       undefined,

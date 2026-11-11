@@ -2,13 +2,16 @@
 
 A local model catalog with the same Vue, Element Plus and Dockview interface as Materials and Studio. Run the server on your computer or trusted network, import model packages, and give viewers stable HTTP URLs to their original files.
 
+Existing SQLite libraries require the explicit [PostgreSQL migration](docs/postgresql-operations.md). Original files and cached conversions stay in place.
+
 ## Quick start
 
-Requires **Node.js 22.16 or newer**, including `node:sqlite`.
+Requires **Node.js 22.16 or newer** and **PostgreSQL 16 or newer**. SQLite is used only to read legacy libraries and private converter staging files.
 
 ```sh
 npm ci
 npm run build
+export MODELS_DATABASE_URL='postgresql://models@localhost/models'
 node build/cli.js init ./my-models
 node build/cli.js --library ./my-models serve --port 7420
 ```
@@ -21,7 +24,7 @@ For LAN access, add `--host 0.0.0.0`. Use the machine's network address and port
 
 ## Model packages
 
-A catalog record has a stable UUID, separate metadata, an entry point and relative files. SQLite owns metadata, tags, full-text search and acquisition history. Immutable original bytes live at `assets/sha256/<prefix>/<hash>` and are shared across packages. Imports preserve the original geometry, axes, units and material files. Optional downloads use xeokit SDK v3 to generate additional formats without modifying those originals.
+A catalog record has a stable UUID, separate metadata, an entry point and relative files. PostgreSQL owns metadata, tags, full-text search and acquisition history. Immutable original bytes live at `assets/sha256/<prefix>/<hash>` and are shared across packages. Imports preserve the original geometry, axes, units and material files. Optional downloads use xeokit SDK v3 to generate additional formats without modifying those originals.
 
 Imports recognize glTF/GLB, IFC, OBJ/MTL, STL, PLY, LAS/LAZ, E57, FBX, Blender, STEP, DXF, Collada, CityJSON and explicit 3D Tiles documents. XKT, XGF, RVT and NWD are stored as opaque files with an explicit warning. Recognition checks file envelopes, not full geometry or specification conformance. glTF and OBJ dependencies are discovered; other external dependencies must be supplied in a manifest. See [formats and storage](docs/storage-format.md).
 
@@ -53,7 +56,7 @@ address before copying. See [model links and xeokit loading](docs/model-links.md
 
 Select a library model and use **Download another format**. Models inspects its geometry with xeokit SDK v3 and lists compatible output formats. Read the notices, then choose **Generate and download**. For IFC, the first request prepares and caches XGF plus DataModel JSON. Other formats are then exported from that cached pair, without parsing IFC again. Other input formats retain their existing on-demand conversion path. Original package downloads remain available.
 
-Conversions survive server restarts. Their cache includes the source hashes and SDK converter revision. Deleting a model removes all its cached conversions and prevents unfinished conversions from publishing afterward. Shared original files and other models' caches are preserved. Schema 2 adds persistent processing jobs and settings. Converted files remain disposable derivatives, not new catalog records.
+Conversions survive server restarts. Their cache includes the source hashes and SDK converter revision. Deleting a model removes all its cached conversions and prevents unfinished conversions from publishing afterward. Shared original files and other models' caches are preserved. Processing jobs and settings are persisted in PostgreSQL. Converted files remain disposable derivatives, not new catalog records.
 
 IFC preparation also caches a thumbnail for the library card, using the already loaded geometry. Missing previews regenerate from XGF.
 
@@ -82,6 +85,7 @@ Plans never download binaries. Explicit execution creates a separate job with bo
 ```ts
 import { ModelsLibrary } from '@xeokit/models';
 
+// MODELS_DATABASE_URL is configured on the Node process.
 const library = await ModelsLibrary.open({ root: './my-models', create: true });
 try {
   const report = await library.importFile({
@@ -123,17 +127,17 @@ Use the executable after installing the package, or prefix commands with `node b
 
 ## Maintenance and development
 
-Deletion removes records, not shared binaries. GC defaults to a preview and coordinates with writers before removing unreferenced or interrupted-import files. Validation checks SQLite, foreign keys, metadata, paths and stored hashes without modifying the catalog. Back up the library with the server stopped, including the database and assets.
+Deletion removes records, not shared binaries. GC defaults to a preview and coordinates with writers before removing unreferenced or interrupted-import files. Validation checks the PostgreSQL schema, foreign keys, metadata, paths and stored hashes without modifying the catalog. Back up PostgreSQL and the asset directory together while catalog writes and processing are stopped. See [PostgreSQL operations](docs/postgresql-operations.md).
 
 ```sh
 npm run build
 npm run typecheck
 npm run lint
-npm test
-npm run test:package
+MODELS_TEST_DATABASE_URL='postgresql://models@localhost/models_test' npm test
+MODELS_TEST_DATABASE_URL='postgresql://models@localhost/models_test' npm run test:package
 ```
 
-Standard tests use isolated temporary libraries and mock provider transport. The optional live test requires `MODELS_LIVE_TESTS=1` and downloads one small Poly Haven model. `npm run dev` serves Vite on 7421 and forwards API calls to the server on 7420.
+Standard tests use isolated PostgreSQL schemas, temporary asset directories and mock provider transport. Set `MODELS_TEST_DATABASE_URL` to a disposable test server; each fixture creates and drops its own schema. The optional live test requires `MODELS_LIVE_TESTS=1` and downloads one small Poly Haven model. `npm run dev` serves Vite on 7421 and forwards API calls to the server on 7420.
 
 IFC conversions use XeoIFC through xeokit SDK v3. Configure `MODELS_XEOIFC_DIR` (or `--xeoifc-dir`) with a matching, licensed runtime. [IFC setup and providers](docs/ifc-providers.md) explains configuration, attribution and testing.
 

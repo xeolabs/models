@@ -72,6 +72,11 @@ test('IFC external mode writes native values once, serves thin JSON, and reuses 
     expect(run.mock.calls.filter(([request]) => request.sourceFormat === 'ifc')).toHaveLength(1);
     const glbData = await f.library.resolveFormatFile(model.id, 'glb', 'model.datamodel.json');
     expect(JSON.parse(fs.readFileSync(glbData.path, 'utf8')).propertySets).toEqual([]);
+    await f.library.configureProperties(model.id, { mode: 'embedded' });
+    const embedded = await document(f.library, model.id);
+    expect(embedded.propertySetMode).toBe('embedded');
+    expect(embedded.propertySets).toHaveLength(2);
+    expect(run.mock.calls.filter(([request]) => request.sourceFormat === 'ifc')).toHaveLength(1);
     const directory = path.join(f.directory, 'properties', model.id);
     await f.library.delete(model.id);
     expect(fs.existsSync(directory)).toBe(false);

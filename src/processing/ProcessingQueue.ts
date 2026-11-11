@@ -17,6 +17,7 @@ export class ProcessingQueue {
   private timer?: ReturnType<typeof setInterval>;
   private active?: { id: string; controller: AbortController; promise: Promise<void> };
   private closed = false;
+  private claiming = false;
   private readonly removedJobs = new Set<string>();
   constructor(
     readonly repository: ProcessingRepository,
@@ -28,51 +29,65 @@ export class ProcessingQueue {
     background = true,
   ) {
     if (background) {
-      this.timer = setInterval(() => this.tick(), 500);
+      this.timer = setInterval(async () => await this.tick(), 500);
       this.timer.unref();
     }
   }
-  enqueue(
+  async enqueue(
     modelId: string,
     kind: ProcessingKind,
     format: string,
     source: 'automatic' | 'requested' = 'requested',
   ) {
-    const job = this.repository.db.transaction(() =>
-      this.repository.enqueue(modelId, kind, format, source),
+    const job = await this.repository.db.transaction(
+      async () => await this.repository.enqueue(modelId, kind, format, source),
     );
     return job;
   }
-  tick(jobId?: string) {
-    if (this.closed || this.active) return;
+  async tick(jobId?: string) {
+    if (this.closed || this.active || this.claiming) return;
+    this.claiming = true;
     let job: ProcessingJob | null;
     try {
-      job = this.repository.claim(this.timer ? undefined : jobId);
+      job = await this.repository.claim(this.timer ? undefined : jobId);
     } catch {
       return;
+    } finally {
+      this.claiming = false;
     }
     if (!job) return;
+    if (this.closed) {
+      await this.repository.finish(job.id, 'interrupted');
+      return;
+    }
     const controller = new AbortController();
     const id = job.id;
-    const monitor = setInterval(() => {
-      const current = this.repository.get(id);
-      if (!current || current.status === 'cancelling') controller.abort();
-      else this.repository.progress(id);
+    const monitor = setInterval(async () => {
+      try {
+        const current = await this.repository.get(id);
+        if (!current || current.status === 'cancelling') controller.abort();
+        else await this.repository.progress(id);
+      } catch {
+        controller.abort();
+      }
     }, 250);
     const promise = Promise.resolve()
-      .then(() =>
-        this.work(job!, controller.signal, (progress) => this.repository.progress(id, progress)),
+      .then(
+        async () =>
+          await this.work(job!, controller.signal, (progress) => {
+            void this.repository.progress(id, progress).catch(() => controller.abort());
+          }),
       )
-      .then(() => {
-        if (controller.signal.aborted || this.repository.get(id)?.status === 'cancelling')
+      .then(async () => {
+        if (controller.signal.aborted || (await this.repository.get(id))?.status === 'cancelling')
           throw new ModelsError('CONVERSION_CANCELLED', 'Conversion cancelled');
-        this.repository.finish(id, 'completed');
+        await this.repository.finish(id, 'completed');
       })
-      .catch((error) => {
+      .catch(async (error) => {
         const interrupted = this.closed;
         const cancelled =
-          controller.signal.aborted || this.repository.get(id)?.status === 'cancelling';
-        this.repository.finish(
+          controller.signal.aborted || (await this.repository.get(id))?.status === 'cancelling';
+        await this.repository.finish(
           id,
           interrupted ? 'interrupted' : cancelled ? 'cancelled' : 'failed',
           cancelled
@@ -90,14 +105,16 @@ export class ProcessingQueue {
       .finally(() => {
         clearInterval(monitor);
         this.active = undefined;
-        if (!this.closed && this.timer) setImmediate(() => this.tick());
+        if (!this.closed && this.timer) setImmediate(async () => await this.tick());
       });
+    // The waiting API reports job failures; a timer must never reject unobserved.
+    void promise.catch(() => controller.abort());
     this.active = { id, controller, promise };
   }
   async wait(id: string) {
     for (;;) {
       if (this.closed) fail('CONVERSION_CANCELLED', 'Conversion stopped with the library');
-      const job = this.repository.get(id);
+      const job = await this.repository.get(id);
       if (!job)
         fail(
           this.removedJobs.has(id) ? 'CONVERSION_CANCELLED' : 'MODEL_NOT_FOUND',
@@ -112,27 +129,27 @@ export class ProcessingQueue {
               : 'CONVERSION_FAILED')) as ModelsErrorCode,
           job.error ?? 'Conversion ' + job.status,
         );
-      this.tick(id);
+      await this.tick(id);
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
-  cancel(id: string) {
-    this.repository.cancel(id);
+  async cancel(id: string) {
+    await this.repository.cancel(id);
     if (this.active?.id === id) this.active.controller.abort();
   }
-  cancelModel(id: string) {
-    for (const job of this.repository.list(id))
+  async cancelModel(id: string) {
+    for (const job of await this.repository.list(id))
       if (['queued', 'running', 'cancelling'].includes(job.status)) this.removedJobs.add(job.id);
-    if (this.active && this.repository.get(this.active.id)?.modelId === id)
+    if (this.active && (await this.repository.get(this.active.id))?.modelId === id)
       this.active.controller.abort();
   }
-  overview(modelId?: string): ProcessingOverview {
-    const settings = this.repository.settings(),
+  async overview(modelId?: string): Promise<ProcessingOverview> {
+    const settings = await this.repository.settings(),
       freeMemoryBytes = os.freemem();
     return {
       settings,
-      jobs: this.repository.list(modelId),
-      counts: this.repository.counts(),
+      jobs: await this.repository.list(modelId),
+      counts: await this.repository.counts(),
       freeMemoryBytes,
       workerLimit: 1,
       resourceMonitoring: process.platform === 'linux' ? 'linux' : 'portable',
@@ -146,7 +163,8 @@ export class ProcessingQueue {
   async close() {
     this.closed = true;
     clearInterval(this.timer);
+    while (this.claiming) await new Promise((resolve) => setTimeout(resolve, 10));
     this.active?.controller.abort();
-    await this.active?.promise;
+    await this.active?.promise.catch(() => {});
   }
 }

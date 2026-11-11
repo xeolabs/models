@@ -1,9 +1,10 @@
 # CLI
 
-Global options: `--library <root>`, `--json`, `--version`, `--help`, `--user-agent <identity>`. Without `--library`, only the current directory is considered. JSON mode emits one stdout envelope; diagnostics remain on stderr.
+Global options: `--library <root>`, `--database-schema <name>`, `--json`, `--version`, `--help`, `--user-agent <identity>`. Without `--library`, only the current directory is considered. JSON mode emits one stdout envelope; diagnostics remain on stderr.
 
 ```text
 models init <root>
+models migrate-postgres [--activate]
 models serve [--port 7420] [--host 127.0.0.1] [--allow-origin <origin>]
 models list [--limit 50] [--offset 0]
 models search [text] [--format ifc] [--provider polyhaven] [--tags building,office]
@@ -86,3 +87,20 @@ models properties sets MODEL_ID --revision REVISION --ids SET_ID,ANOTHER_SET_ID
 The default applies to new imports only. Configuring an existing model queues a
 storage conversion; the running server processes it. `--json` retains the normal
 single-envelope output. Embedded and external are the two storage modes.
+
+## PostgreSQL
+
+Set `MODELS_DATABASE_URL` on the server or CLI process. Connection credentials never
+belong in browser configuration. `--database-schema` selects the schema when creating
+or migrating a library; subsequent opens use `postgres.json` in the asset root.
+
+```sh
+export MODELS_DATABASE_URL='postgresql://models@localhost/models'
+models --library ./my-models --database-schema models migrate-postgres --activate
+models --library ./my-models serve --port 7420
+```
+
+Stop writers before migration. It requires SQLite schema 3 and an absent PostgreSQL
+schema, verifies copied values and constraints, and retains all source files. Without
+`--activate`, it leaves the asset directory unbound for inspection. See
+[PostgreSQL operations](postgresql-operations.md) before cutting over a live library.

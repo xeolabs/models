@@ -113,8 +113,10 @@ export class AcquisitionRoutes {
           fail('INVALID_PLAN', 'Remote model: invalid encoded identifier');
         }
         if (remote[3] === '/preview') {
-          const bytes = await this.previews.get(remote[1] as ProviderId, remoteId, () =>
-            a.getPreviewUrl(remote[1] as ProviderId, remoteId),
+          const bytes = await this.previews.get(
+            remote[1] as ProviderId,
+            remoteId,
+            async () => await a.getPreviewUrl(remote[1] as ProviderId, remoteId),
           );
           response.writeHead(200, {
             'Content-Type': 'image/webp',

@@ -13,8 +13,8 @@ export interface DownloadedFile {
 export interface DownloadOptions {
   signal?: AbortSignal;
   maxBytes: number;
-  onBytes: (bytes: number) => void;
-  remainingBytes: () => number;
+  onBytes: (bytes: number) => void | Promise<void>;
+  remainingBytes: () => number | Promise<number>;
 }
 
 /**
@@ -49,7 +49,7 @@ export class DownloadManager {
           fail('INVALID_PROVIDER_RESPONSE', 'Download: invalid content length');
         if ((declared ?? file.sizeBytes ?? 0) > options.maxBytes)
           fail('DOWNLOAD_TOO_LARGE', 'Download: response exceeds file size limit');
-        if ((declared ?? file.sizeBytes ?? 0) > options.remainingBytes())
+        if ((declared ?? file.sizeBytes ?? 0) > (await options.remainingBytes()))
           fail(
             'ACQUISITION_LIMIT_EXCEEDED',
             'Download: response exceeds remaining transfer budget',
@@ -68,7 +68,7 @@ export class DownloadManager {
         try {
           for await (const chunk of response.body) {
             options.signal?.throwIfAborted();
-            options.onBytes(chunk.length);
+            await options.onBytes(chunk.length);
             bytes += chunk.length;
             if (bytes > options.maxBytes)
               fail('DOWNLOAD_TOO_LARGE', 'Download: streamed file exceeds limit');

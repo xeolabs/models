@@ -32,3 +32,6 @@ export type { XeoIFCOptions } from './conversion/XeoIFCRuntime.js';
 export * from './processing/types.js';
 
 export * from './properties/types.js';
+
+export type { PostgresOptions } from './storage/PostgresDatabase.js';
+export { migrateSqliteLibrary } from './storage/PostgresMigration.js';

@@ -54,16 +54,16 @@ test('cache size and age eviction are bounded, metadata survives reopen, symlink
     expect((await a.cacheStats()).entries).toBe(1);
     const db = new Database(f.directory);
     const metadata = new ProviderMetadataCache(db);
-    metadata.set('polyhaven:test', { value: { a: 1 }, storedAt: 123, etag: 'tag' });
-    expect(new ProviderMetadataCache(db).get('polyhaven:test')?.etag).toBe('tag');
+    await metadata.set('polyhaven:test', { value: { a: 1 }, storedAt: 123, etag: 'tag' });
+    expect((await new ProviderMetadataCache(db).get('polyhaven:test'))?.etag).toBe('tag');
     const cache = new DownloadCache(db, { maxAgeMs: 0 });
     const item = (await a.listPlans()).items[0].items[0];
     expect(await cache.get(item, item.files[0], f.source)).toBeUndefined();
     const key = '0'.repeat(64);
     fs.symlinkSync(f.source, path.join(cache.root, key + '.bin'));
-    expect(() => cache.clear()).toThrow();
+    await expect(async () => await cache.clear()).rejects.toThrow();
     fs.unlinkSync(path.join(cache.root, key + '.bin'));
-    db.sql.close();
+    await db.close();
   } finally {
     await f.close();
   }

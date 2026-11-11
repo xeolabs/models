@@ -1,45 +1,34 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
+import { hashFile } from '../storage/hashFile.js';
+import { DatabaseSync } from 'node:sqlite';
 import { Database } from '../storage/Database.js';
 import { noLinks } from '../storage/paths.js';
 import { fail } from '../domain/ModelsError.js';
-import { copyConversionFile } from '../conversion/ConversionFiles.js';
 import { PropertyDatabaseReader } from './PropertyDatabaseReader.js';
+import { PropertyDatabaseWriter } from './PropertyDatabaseWriter.js';
 import { propertyInput, propertyModeSchema, propertyRevisionSchema } from './schema.js';
-import type { ModelPropertiesInfo, PropertySetMode } from './types.js';
+import type { ModelPropertiesInfo, PropertySetMode, ModelPropertySet } from './types.js';
+import { copyRows } from '../storage/PostgresMigration.js';
 
 /**
- * Registers model-owned property databases and publishes complete generations.
- * Files are immutable after publication and are never part of the disposable cache.
+ * PostgreSQL owns published properties. SQLite files are private worker exchange
+ * artifacts and may be discarded without losing registered property values.
  */
 export class ModelPropertyStore {
-  private readonly root: string;
-  constructor(private readonly db: Database) {
-    this.root = path.join(db.root, 'properties');
-    noLinks(this.root);
-  }
-  private directory(id: string): string {
-    propertyInput(z.string().uuid(), id);
-    const directory = path.join(this.root, id);
-    noLinks(directory);
-    return directory;
-  }
-  initialize(id: string, mode: PropertySetMode): void {
+  constructor(private readonly db: Database) {}
+  async initialize(id: string, mode: PropertySetMode): Promise<void> {
     propertyInput(propertyModeSchema, mode);
-    this.db.sql.prepare('INSERT INTO model_properties(model_id,mode) VALUES(?,?)').run(id, mode);
+    await this.db.query('INSERT INTO model_properties(model_id,mode) VALUES($1,$2)', [id, mode]);
   }
-  info(id: string): ModelPropertiesInfo {
-    const row = this.db.sql.prepare('SELECT * FROM model_properties WHERE model_id=?').get(id);
+  async info(id: string): Promise<ModelPropertiesInfo> {
+    const row = await this.db.one(
+      `SELECT p.*,g.complete FROM model_properties p LEFT JOIN property_generations g ON g.model_id=p.model_id AND g.revision=p.revision WHERE p.model_id=$1`,
+      [id],
+    );
     if (!row) fail('MODEL_NOT_FOUND', 'Properties: model does not exist');
-    if (row.revision && row.file_name !== row.revision + '.db')
-      fail('DATABASE_ERROR', 'Properties: invalid registered database path');
-    const ready =
-      row.mode === 'external' &&
-      !!row.revision &&
-      fs.existsSync(path.join(this.directory(id), row.file_name as string));
+    const ready = row.mode === 'external' && row.complete === true;
     return {
       modelId: id,
       mode: row.mode as PropertySetMode,
@@ -53,100 +42,196 @@ export class ModelPropertyStore {
         : {}),
     };
   }
-  setMode(id: string, mode: PropertySetMode): void {
+  async setMode(id: string, mode: PropertySetMode): Promise<void> {
     propertyInput(propertyModeSchema, mode);
-    this.info(id);
-    this.db.sql.prepare('UPDATE model_properties SET mode=? WHERE model_id=?').run(mode, id);
+    await this.info(id);
+    await this.db.query('UPDATE model_properties SET mode=$1 WHERE model_id=$2', [mode, id]);
   }
   reader(id: string, revision: string): PropertyDatabaseReader {
     propertyInput(propertyRevisionSchema, revision);
-    const info = this.info(id);
-    if (!info.ready) fail('PROPERTIES_NOT_READY', 'Properties: prepare this model first');
-    if (info.revision !== revision)
-      fail(
-        'PROPERTY_REVISION_MISMATCH',
-        'Properties: reload the model before requesting a different revision',
-      );
-    return new PropertyDatabaseReader(this.file(id, revision), revision);
+    return new PropertyDatabaseReader(this.db, id, revision);
   }
-  file(id: string, revision: string): string {
+
+  /**
+   * Stream a registered generation into a private worker file. It is rebuilt from
+   * PostgreSQL so a stale backup can never become the authority for an export.
+   */
+  async file(
+    id: string,
+    revision: string,
+    directory: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
     propertyInput(propertyRevisionSchema, revision);
-    const file = path.join(this.directory(id), revision + '.db');
-    noLinks(file);
-    return file;
-  }
-  async prepareInstall(id: string, revision: string, source: string, signal: AbortSignal) {
-    const destination = this.file(id, revision);
-    noLinks(source);
-    const sourceDb = new DatabaseSync(source, { readOnly: true });
-    let sets: number, objects: number;
+    propertyInput(z.string().uuid(), id);
+    noLinks(directory);
+    await fs.promises.mkdir(directory, { recursive: true });
+    const file = path.join(directory, 'properties.db');
+    const writer = new PropertyDatabaseWriter(file, id, revision);
     try {
-      const info = sourceDb.prepare('SELECT * FROM info').get();
+      // Completed generations are immutable. Read without a long row lock so
+      // cancellation and deletion remain available during very large exports.
+      await this.assertGeneration(id, revision);
+      let after: Buffer = Buffer.alloc(0);
+      for (;;) {
+        signal?.throwIfAborted();
+        const rows = await this.db.all(
+          'SELECT id,id_key,json FROM property_sets WHERE model_id=$1 AND revision=$2 AND id_key>$3 ORDER BY id_key LIMIT 16',
+          [id, revision, after],
+        );
+        if (!rows.length) break;
+        for (const row of rows) writer.addSet(JSON.parse(row.json as string) as ModelPropertySet);
+        after = rows.at(-1)!.id_key as Buffer;
+      }
+      after = Buffer.alloc(0);
+      for (;;) {
+        signal?.throwIfAborted();
+        const rows = await this.db.all(
+          `SELECT o.id,o.id_key,
+            ARRAY(SELECT r.set_id FROM object_sets r WHERE r.model_id=o.model_id
+              AND r.revision=o.revision AND r.object_key=o.id_key AND r.object_id=o.id ORDER BY r.ordinal) refs
+           FROM property_objects o WHERE model_id=$1 AND revision=$2 AND id_key>$3 ORDER BY id_key LIMIT 128`,
+          [id, revision, after],
+        );
+        if (!rows.length) break;
+        for (const row of rows) writer.addObject(row.id as string, row.refs as string[]);
+        after = rows.at(-1)!.id_key as Buffer;
+      }
+      signal?.throwIfAborted();
+      await this.assertGeneration(id, revision);
+      writer.finish();
+      return file;
+    } catch (error) {
+      writer.close();
+      await fs.promises.rm(file, { force: true });
+      throw error;
+    }
+  }
+
+  /**
+   * Internal exports may reuse a completed external generation while switching
+   * back to embedded mode. Public queries still require the current external mode.
+   */
+  private async assertGeneration(id: string, revision: string): Promise<void> {
+    const row = await this.db.one(
+      'SELECT complete FROM property_generations WHERE model_id=$1 AND revision=$2',
+      [id, revision],
+    );
+    if (!row?.complete)
+      fail('PROPERTIES_NOT_READY', 'Properties: completed generation is unavailable');
+  }
+
+  /**
+   * Import a completed worker database before publication. Only commit() makes
+   * the revision visible, inside the same transaction as the conversion result.
+   */
+  async prepareInstall(id: string, revision: string, source: string, signal: AbortSignal) {
+    propertyInput(propertyRevisionSchema, revision);
+    noLinks(source);
+    if (signal.aborted) fail('CONVERSION_CANCELLED', 'Properties: publication cancelled');
+    const sourceHash = await hashFile(source, signal);
+    const stage = new DatabaseSync(source, { readOnly: true });
+    let sets = 0,
+      objects = 0;
+    try {
+      const info = stage.prepare('SELECT * FROM info').get();
       if (
         info?.model_id !== id ||
         info.revision !== revision ||
         info.complete !== 1 ||
-        sourceDb.prepare('PRAGMA user_version').get()?.user_version !== 1
+        stage.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok' ||
+        stage.prepare('PRAGMA foreign_key_check').all().length
       )
-        fail(
-          'DATABASE_ERROR',
-          'Properties: staged database is incomplete or belongs to another model',
-        );
+        fail('DATABASE_ERROR', 'Properties: invalid staged generation');
       sets = Number(info.property_set_count);
       objects = Number(info.object_count);
-    } finally {
-      sourceDb.close();
-    }
-    await fs.promises.mkdir(path.dirname(destination), { recursive: true });
-    const staged = destination + '.partial-' + randomUUID();
-    try {
-      await copyConversionFile(source, staged, signal);
-      const hash = await this.hash(staged, signal);
-      if (fs.existsSync(destination) && (await this.hash(destination, signal)) !== hash)
-        fail('CONFLICT', 'Properties: a different database already uses this revision');
-      return {
-        commit: () => {
+      const load = await this.db.transaction(async () => {
+        await this.db.lock('model:' + id);
+        if (signal.aborted) fail('CONVERSION_CANCELLED', 'Properties: publication cancelled');
+        const existing = await this.db.one(
+          'SELECT complete,source_hash FROM property_generations WHERE model_id=$1 AND revision=$2',
+          [id, revision],
+        );
+        if (existing?.complete) {
+          if (existing.source_hash !== sourceHash)
+            fail('CONFLICT', 'Properties: this revision already has different contents');
+          return false;
+        }
+        await this.db.query('DELETE FROM property_generations WHERE model_id=$1 AND revision=$2', [
+          id,
+          revision,
+        ]);
+        await this.db.query(
+          'INSERT INTO property_generations(model_id,revision,property_set_count,object_count,source_hash) VALUES($1,$2,$3,$4,$5)',
+          [id, revision, sets, objects, sourceHash],
+        );
+        return true;
+      });
+      if (load) {
+        for (const [from, to] of [
+          ['property_sets', 'property_sets'],
+          ['objects', 'property_objects'],
+          ['object_sets', 'object_sets'],
+          ['property_values', 'property_values'],
+        ]) {
           if (signal.aborted) fail('CONVERSION_CANCELLED', 'Properties: publication cancelled');
-          if (this.info(id).mode !== 'external')
-            fail('CONFLICT', 'Properties: storage mode changed');
-          if (!fs.existsSync(destination)) fs.renameSync(staged, destination);
-          this.db.sql
-            .prepare(
-              `UPDATE model_properties SET revision=?,file_name=?,property_set_count=?,object_count=? WHERE model_id=?`,
-            )
-            .run(revision, path.basename(destination), sets, objects, id);
-        },
-        cleanup: async () => {
-          await fs.promises.rm(staged, { force: true });
-          if (!this.db.sql.prepare('SELECT id FROM models WHERE id=?').get(id)) this.remove(id);
-        },
-      };
+          const count = await copyRows(
+            this.db,
+            to,
+            stage.prepare(`SELECT * FROM "${from}"`).iterate(),
+            { model_id: id, revision },
+            signal,
+          );
+          if (
+            (from === 'property_sets' && count !== sets) ||
+            (from === 'objects' && count !== objects)
+          )
+            fail('DATABASE_ERROR', 'Properties: staged counts differ from registered counts');
+        }
+        if (signal.aborted) fail('CONVERSION_CANCELLED', 'Properties: publication cancelled');
+      }
     } catch (error) {
-      await fs.promises.rm(staged, { force: true });
+      await this.db
+        .query(
+          'DELETE FROM property_generations WHERE model_id=$1 AND revision=$2 AND source_hash=$3 AND NOT complete',
+          [id, revision, sourceHash],
+        )
+        .catch(() => {});
       throw error;
+    } finally {
+      stage.close();
     }
-  }
-  private async hash(file: string, signal: AbortSignal): Promise<string> {
-    noLinks(file);
-    const hash = createHash('sha256');
-    for await (const chunk of fs.createReadStream(file, { highWaterMark: 256 * 1024, signal }))
-      hash.update(chunk);
-    return hash.digest('hex');
-  }
-  remove(id: string): void {
-    fs.rmSync(this.directory(id), { recursive: true, force: true });
+    return {
+      commit: async () => {
+        await this.db.lock('model:' + id);
+        if (signal.aborted) fail('CONVERSION_CANCELLED', 'Properties: publication cancelled');
+        if ((await this.info(id)).mode !== 'external')
+          fail('CONFLICT', 'Properties: storage mode changed');
+        await this.db.query(
+          'UPDATE property_generations SET complete=true WHERE model_id=$1 AND revision=$2',
+          [id, revision],
+        );
+        await this.db.query(
+          'UPDATE model_properties SET revision=$1,file_name=$2,property_set_count=$3,object_count=$4 WHERE model_id=$5',
+          [revision, revision + '.db', sets, objects, id],
+        );
+      },
+      cleanup: async () => {
+        await this.db.query(
+          'DELETE FROM property_generations g WHERE model_id=$1 AND revision=$2 AND NOT complete AND NOT EXISTS(SELECT 1 FROM model_properties p WHERE p.model_id=g.model_id AND p.revision=g.revision)',
+          [id, revision],
+        );
+      },
+    };
   }
 
   /**
-   * A crash after catalog deletion can leave files behind. Only absent model IDs
-   * are removed; another process may still be staging a live model's generation.
+   * Property rows are removed by foreign keys. Remove disposable worker exports.
    */
-  recoverDeletedModels(): void {
-    if (!fs.existsSync(this.root)) return;
-    for (const entry of fs.readdirSync(this.root, { withFileTypes: true })) {
-      if (!entry.isDirectory() || !z.string().uuid().safeParse(entry.name).success) continue;
-      if (!this.db.sql.prepare('SELECT id FROM models WHERE id=?').get(entry.name))
-        this.remove(entry.name);
-    }
+  async remove(id: string): Promise<void> {
+    propertyInput(z.string().uuid(), id);
+    const directory = path.join(this.db.root, '.cache', 'property-exchange', id);
+    noLinks(directory);
+    await fs.promises.rm(directory, { recursive: true, force: true });
   }
 }

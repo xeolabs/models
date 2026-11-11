@@ -7,7 +7,7 @@ import { CONVERSION_LIMITS } from './limits.js';
 import { copyConversionFile, inspectConversionFile } from './ConversionFiles.js';
 
 /**
- * Stage verified copies outside SQLite transactions. Cancel and status requests
+ * Stage verified copies outside PostgreSQL transactions. Cancel and status requests
  * stay responsive while large input files are copied and hashed.
  */
 export async function stageConversion(

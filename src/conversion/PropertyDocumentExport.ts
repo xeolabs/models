@@ -31,7 +31,7 @@ export class PropertyDocumentExport {
     fingerprint: string,
     signal: AbortSignal,
     report: (progress: ProcessingProgress) => void,
-    check: () => void,
+    check: () => void | Promise<void>,
   ): Promise<void> {
     const name = 'model.datamodel.json';
     const source = await this.cache.getFile(model.id, fingerprint, 'datamodel', name);
@@ -51,7 +51,12 @@ export class PropertyDocumentExport {
             entrypoint: relativeFile(stage.input, name),
             dataModelFile: relativeFile(stage.input, name),
             propertyTask: 'embed',
-            propertyDatabaseFile: this.properties.file(model.id, fingerprint),
+            propertyDatabaseFile: await this.properties.file(
+              model.id,
+              fingerprint,
+              stage.root,
+              signal,
+            ),
             materialFiles: [],
             output: stage.output,
           },

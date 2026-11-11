@@ -15,26 +15,28 @@ import type {
 export class AcquisitionJobRepository {
   readonly owner = executionOwner();
   constructor(readonly db: Database) {}
-  recover() {
-    this.db.transaction(() => {
-      for (const row of this.db.sql
-        .prepare("SELECT id,owner_json FROM acquisition_jobs WHERE status='running'")
-        .all())
+  async recover() {
+    await this.db.transaction(async () => {
+      await this.db.lock('acquisition-jobs');
+      for (const row of await this.db.all(
+        "SELECT id,owner_json FROM acquisition_jobs WHERE status='running'",
+        [],
+      ))
         if (row.owner_json && !ownerAlive(JSON.parse(row.owner_json as string)))
-          this.db.sql
-            .prepare("UPDATE acquisition_jobs SET status='interrupted',owner_json=NULL WHERE id=?")
-            .run(row.id);
+          await this.db.query(
+            "UPDATE acquisition_jobs SET status='interrupted',owner_json=NULL WHERE id=$1",
+            [row.id],
+          );
     });
   }
-  create(plan: AcquisitionPlan, options: ExecutionOptions) {
-    return this.db.transaction(() => {
+  async create(plan: AcquisitionPlan, options: ExecutionOptions) {
+    return await this.db.transaction(async () => {
+      await this.db.lock('acquisition-jobs');
       const id = randomUUID(),
         now = new Date().toISOString();
-      this.db.sql
-        .prepare(
-          "INSERT INTO acquisition_jobs(id,plan_id,status,created_at,options_json) VALUES(?,?,'pending',?,?)",
-        )
-        .run(
+      await this.db.query(
+        "INSERT INTO acquisition_jobs(id,plan_id,status,created_at,options_json) VALUES($1,$2,'pending',$3,$4)",
+        [
           id,
           plan.id,
           now,
@@ -42,20 +44,20 @@ export class AcquisitionJobRepository {
             concurrency: options.concurrency ?? 2,
             continueOnError: options.continueOnError ?? true,
           }),
-        );
+        ],
+      );
       for (const item of plan.items)
-        this.db.sql
-          .prepare(
-            "INSERT INTO acquisition_job_items(id,job_id,plan_item_id,status) VALUES(?,?,?,'pending')",
-          )
-          .run(randomUUID(), id, item.id);
-      return this.require(id);
+        await this.db.query(
+          "INSERT INTO acquisition_job_items(id,job_id,plan_item_id,status) VALUES($1,$2,$3,'pending')",
+          [randomUUID(), id, item.id],
+        );
+      return await this.require(id);
     });
   }
-  get(id: string): AcquisitionJob | null {
-    const r = this.db.sql.prepare('SELECT * FROM acquisition_jobs WHERE id=?').get(id);
+  async get(id: string): Promise<AcquisitionJob | null> {
+    const r = await this.db.one('SELECT * FROM acquisition_jobs WHERE id=$1', [id]);
     if (!r) return null;
-    const items = this.items(id);
+    const items = await this.items(id);
     return {
       id: r.id as string,
       planId: r.plan_id as string,
@@ -70,79 +72,83 @@ export class AcquisitionJobRepository {
       skippedItems: items.filter((i) => i.status === 'skipped').length,
     };
   }
-  require(id: string) {
-    const j = this.get(id);
+  async require(id: string) {
+    const j = await this.get(id);
     if (!j) fail('JOB_NOT_FOUND', 'Acquisition job: job does not exist');
     return j;
   }
-  items(id: string): AcquisitionJobItem[] {
-    return this.db.sql
-      .prepare(
-        'SELECT j.*,p.model_name,p.provider,p.remote_asset_id,p.resolution,p.format FROM acquisition_job_items j JOIN acquisition_plan_items p ON p.id=j.plan_item_id WHERE j.job_id=? ORDER BY p.ordinal',
+  async items(id: string): Promise<AcquisitionJobItem[]> {
+    return (
+      await this.db.all(
+        'SELECT j.*,p.model_name,p.provider,p.remote_asset_id,p.resolution,p.format FROM acquisition_job_items j JOIN acquisition_plan_items p ON p.id=j.plan_item_id WHERE j.job_id=$1 ORDER BY p.ordinal',
+        [id],
       )
-      .all(id)
-      .map((r) => ({
-        id: r.id as string,
-        jobId: id,
-        planItemId: r.plan_item_id as string,
-        modelName: r.model_name as string,
-        provider: r.provider as AcquisitionJobItem['provider'],
-        remoteId: r.remote_asset_id as string,
-        resolution: r.resolution as string,
-        format: r.format as string,
-        status: r.status as AcquisitionJobItemStatus,
-        attempts: Number(r.attempts),
-        downloadedBytes: Number(r.downloaded_bytes),
-        modelId: (r.model_id as string) ?? undefined,
-        errorCode: (r.error_code as string) ?? undefined,
-        errorMessage: (r.error_message as string) ?? undefined,
-        startedAt: (r.started_at as string) ?? undefined,
-        completedAt: (r.completed_at as string) ?? undefined,
-        warnings: JSON.parse(r.warnings_json as string),
-      }));
+    ).map((r) => ({
+      id: r.id as string,
+      jobId: id,
+      planItemId: r.plan_item_id as string,
+      modelName: r.model_name as string,
+      provider: r.provider as AcquisitionJobItem['provider'],
+      remoteId: r.remote_asset_id as string,
+      resolution: r.resolution as string,
+      format: r.format as string,
+      status: r.status as AcquisitionJobItemStatus,
+      attempts: Number(r.attempts),
+      downloadedBytes: Number(r.downloaded_bytes),
+      modelId: (r.model_id as string) ?? undefined,
+      errorCode: (r.error_code as string) ?? undefined,
+      errorMessage: (r.error_message as string) ?? undefined,
+      startedAt: (r.started_at as string) ?? undefined,
+      completedAt: (r.completed_at as string) ?? undefined,
+      warnings: JSON.parse(r.warnings_json as string),
+    }));
   }
-  list(q: PlanListQuery = {}) {
+  async list(q: PlanListQuery = {}) {
     const { limit, offset } = pageQuery(q);
     return {
-      items: this.db.sql
-        .prepare('SELECT id FROM acquisition_jobs ORDER BY created_at DESC,id LIMIT ? OFFSET ?')
-        .all(limit, offset)
-        .map((r) => this.require(r.id as string)),
-      total: Number(this.db.sql.prepare('SELECT count(*) AS n FROM acquisition_jobs').get()!.n),
+      items: await Promise.all(
+        (
+          await this.db.all(
+            'SELECT id FROM acquisition_jobs ORDER BY created_at DESC,id LIMIT $1 OFFSET $2',
+            [limit, offset],
+          )
+        ).map(async (r) => await this.require(r.id as string)),
+      ),
+      total: Number((await this.db.one('SELECT count(*) AS n FROM acquisition_jobs', []))!.n),
       limit,
       offset,
     };
   }
-  options(id: string): ExecutionOptions {
-    this.require(id);
+  async options(id: string): Promise<ExecutionOptions> {
+    await this.require(id);
     return JSON.parse(
-      this.db.sql.prepare('SELECT options_json FROM acquisition_jobs WHERE id=?').get(id)!
+      (await this.db.one('SELECT options_json FROM acquisition_jobs WHERE id=$1', [id]))!
         .options_json as string,
     );
   }
-  claim(id: string) {
-    this.db.transaction(() => {
-      const job = this.require(id);
+  async claim(id: string) {
+    await this.db.transaction(async () => {
+      await this.db.lock('acquisition-jobs');
+      const job = await this.require(id);
       if (job.status === 'running')
         fail('JOB_CONFLICT', 'Execute job: another execution owns this job');
       if (job.status === 'completed')
         fail('JOB_CONFLICT', 'Resume job: execution is already finished');
-      this.db.sql
-        .prepare(
-          "UPDATE acquisition_jobs SET status='running',owner_json=?,cancel_requested=0,started_at=COALESCE(started_at,?),completed_at=NULL WHERE id=?",
-        )
-        .run(JSON.stringify(this.owner), new Date().toISOString(), id);
-      this.db.sql
-        .prepare(
-          "UPDATE acquisition_job_items SET status='pending',error_code=NULL,error_message=NULL,completed_at=NULL WHERE job_id=? AND status NOT IN ('completed','skipped')",
-        )
-        .run(id);
+      await this.db.query(
+        "UPDATE acquisition_jobs SET status='running',owner_json=$1,cancel_requested=0,started_at=COALESCE(started_at,$2),completed_at=NULL WHERE id=$3",
+        [JSON.stringify(this.owner), new Date().toISOString(), id],
+      );
+      await this.db.query(
+        "UPDATE acquisition_job_items SET status='pending',error_code=NULL,error_message=NULL,completed_at=NULL WHERE job_id=$1 AND status NOT IN ('completed','skipped')",
+        [id],
+      );
     });
   }
-  check(id: string) {
-    const row = this.db.sql
-      .prepare('SELECT status,owner_json,cancel_requested FROM acquisition_jobs WHERE id=?')
-      .get(id);
+  async check(id: string) {
+    const row = await this.db.one(
+      'SELECT status,owner_json,cancel_requested FROM acquisition_jobs WHERE id=$1',
+      [id],
+    );
     if (
       !row ||
       row.status !== 'running' ||
@@ -151,81 +157,83 @@ export class AcquisitionJobRepository {
       fail('JOB_CONFLICT', 'Execute job: ownership changed');
     if (row.cancel_requested) fail('DOWNLOAD_CANCELLED', 'Execute job: cancellation requested');
   }
-  cancel(id: string) {
-    this.db.transaction(() => {
-      const job = this.require(id);
+  async cancel(id: string) {
+    await this.db.transaction(async () => {
+      await this.db.lock('acquisition-jobs');
+      const job = await this.require(id);
       if (job.status === 'running')
-        this.db.sql.prepare('UPDATE acquisition_jobs SET cancel_requested=1 WHERE id=?').run(id);
+        await this.db.query('UPDATE acquisition_jobs SET cancel_requested=1 WHERE id=$1', [id]);
       else if (job.status !== 'completed') {
-        this.db.sql
-          .prepare(
-            "UPDATE acquisition_jobs SET status='cancelled',cancel_requested=1,completed_at=? WHERE id=?",
-          )
-          .run(new Date().toISOString(), id);
-        this.db.sql
-          .prepare(
-            "UPDATE acquisition_job_items SET status='cancelled' WHERE job_id=? AND status NOT IN ('completed','skipped')",
-          )
-          .run(id);
+        await this.db.query(
+          "UPDATE acquisition_jobs SET status='cancelled',cancel_requested=1,completed_at=$1 WHERE id=$2",
+          [new Date().toISOString(), id],
+        );
+        await this.db.query(
+          "UPDATE acquisition_job_items SET status='cancelled' WHERE job_id=$1 AND status NOT IN ('completed','skipped')",
+          [id],
+        );
       }
     });
   }
-  begin(jobId: string, itemId: string) {
-    this.db.transaction(() => {
-      this.check(jobId);
-      this.db.sql
-        .prepare(
-          "UPDATE acquisition_job_items SET attempts=attempts+1,status='downloading',started_at=?,completed_at=NULL WHERE id=? AND job_id=?",
-        )
-        .run(new Date().toISOString(), itemId, jobId);
+  async begin(jobId: string, itemId: string) {
+    await this.db.transaction(async () => {
+      await this.db.lock('acquisition-jobs');
+      await this.check(jobId);
+      await this.db.query(
+        "UPDATE acquisition_job_items SET attempts=attempts+1,status='downloading',started_at=$1,completed_at=NULL WHERE id=$2 AND job_id=$3",
+        [new Date().toISOString(), itemId, jobId],
+      );
     });
   }
-  status(
+  async status(
     itemId: string,
     status: AcquisitionJobItemStatus,
     error?: { code: string; message: string },
   ) {
-    this.db.transaction(() =>
-      this.db.sql
-        .prepare(
-          'UPDATE acquisition_job_items SET status=?,error_code=?,error_message=?,completed_at=? WHERE id=?',
-        )
-        .run(
-          status,
-          error?.code ?? null,
-          error?.message ?? null,
-          ['failed', 'stale', 'cancelled', 'skipped', 'completed'].includes(status)
-            ? new Date().toISOString()
-            : null,
-          itemId,
+    await this.db.transaction(
+      async () =>
+        await this.db.query(
+          'UPDATE acquisition_job_items SET status=$1,error_code=$2,error_message=$3,completed_at=$4 WHERE id=$5',
+          [
+            status,
+            error?.code ?? null,
+            error?.message ?? null,
+            ['failed', 'stale', 'cancelled', 'skipped', 'completed'].includes(status)
+              ? new Date().toISOString()
+              : null,
+            itemId,
+          ],
         ),
     );
   }
-  transferred(jobId: string, itemId: string, bytes: number, limit: number) {
+  async transferred(jobId: string, itemId: string, bytes: number, limit: number) {
     // Count received bytes even on a failed attempt. Never reset these counters on resume.
-    const total = this.db.transaction(() => {
-      this.check(jobId);
-      this.db.sql
-        .prepare('UPDATE acquisition_jobs SET downloaded_bytes=downloaded_bytes+? WHERE id=?')
-        .run(bytes, jobId);
-      this.db.sql
-        .prepare(
-          'UPDATE acquisition_job_items SET downloaded_bytes=downloaded_bytes+? WHERE id=? AND job_id=?',
-        )
-        .run(bytes, itemId, jobId);
-      return this.require(jobId).downloadedBytes;
+    const total = await this.db.transaction(async () => {
+      await this.db.lock('acquisition-jobs');
+      await this.check(jobId);
+      await this.db.query(
+        'UPDATE acquisition_jobs SET downloaded_bytes=downloaded_bytes+$1 WHERE id=$2',
+        [bytes, jobId],
+      );
+      await this.db.query(
+        'UPDATE acquisition_job_items SET downloaded_bytes=downloaded_bytes+$1 WHERE id=$2 AND job_id=$3',
+        [bytes, itemId, jobId],
+      );
+      return (await this.require(jobId)).downloadedBytes;
     });
     if (total > limit)
       fail('ACQUISITION_LIMIT_EXCEEDED', 'Download: acquisition transfer budget exhausted');
   }
-  finish(id: string, status: AcquisitionJobStatus) {
-    this.db.transaction(() => {
-      const row = this.db.sql.prepare('SELECT owner_json FROM acquisition_jobs WHERE id=?').get(id);
+  async finish(id: string, status: AcquisitionJobStatus) {
+    await this.db.transaction(async () => {
+      await this.db.lock('acquisition-jobs');
+      const row = await this.db.one('SELECT owner_json FROM acquisition_jobs WHERE id=$1', [id]);
       if (row?.owner_json && JSON.parse(row.owner_json as string).token !== this.owner.token)
         fail('JOB_CONFLICT', 'Finish job: another execution owns the job');
-      this.db.sql
-        .prepare('UPDATE acquisition_jobs SET status=?,owner_json=NULL,completed_at=? WHERE id=?')
-        .run(status, new Date().toISOString(), id);
+      await this.db.query(
+        'UPDATE acquisition_jobs SET status=$1,owner_json=NULL,completed_at=$2 WHERE id=$3',
+        [status, new Date().toISOString(), id],
+      );
     });
   }
 }

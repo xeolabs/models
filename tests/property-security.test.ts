@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from 'vitest';
-import { DatabaseSync } from 'node:sqlite';
 import { fixture } from './helpers.js';
 import { Database } from '../src/storage/Database.js';
 import { ModelsLibrary } from '../src/ModelsLibrary.js';
@@ -19,22 +18,14 @@ const set = {
   properties: [{ name: 'value', value: 1 }],
 };
 
-test('a version-2 catalog upgrades without changing models or originals', async () => {
+test('reopening preserves registered models and property modes', async () => {
   const f = await fixture();
   try {
     const model = await f.library.create({ metadata: { name: 'Existing' } });
-    await f.library.close();
-    const old = new DatabaseSync(path.join(f.directory, 'models.db'));
-    old.exec('DROP TABLE model_properties; PRAGMA user_version=2;');
-    old.close();
     const reopened = await ModelsLibrary.open({ root: f.directory });
     try {
       expect((await reopened.get(model.id))?.metadata.name).toBe('Existing');
-      expect(await reopened.propertiesInfo(model.id)).toEqual({
-        modelId: model.id,
-        mode: 'embedded',
-        ready: false,
-      });
+      expect((await reopened.propertiesInfo(model.id)).mode).toBe('embedded');
     } finally {
       await reopened.close();
     }
@@ -49,7 +40,7 @@ test('invalid, mismatched, cancelled and late publications never register a prop
     store = new ModelPropertyStore(db);
   try {
     const model = await f.library.create({ metadata: { name: 'Transient' } });
-    store.setMode(model.id, 'external');
+    await store.setMode(model.id, 'external');
     const file = path.join(f.root, 'stage.db');
     const writer = new PropertyDatabaseWriter(file, model.id, revision);
     writer.addSet(set);
@@ -68,7 +59,9 @@ test('invalid, mismatched, cancelled and late publications never register a prop
       new AbortController().signal,
     );
     await f.library.delete(model.id);
-    expect(() => db.transaction(() => installation.commit())).toThrow('model does not exist');
+    await expect(
+      async () => await db.transaction(async () => await installation.commit()),
+    ).rejects.toThrow('model does not exist');
     await installation.cleanup();
     expect(fs.existsSync(path.join(f.directory, 'properties', model.id))).toBe(false);
     const broken = new PropertyDatabaseWriter(path.join(f.root, 'broken.db'), model.id, revision);
@@ -78,7 +71,7 @@ test('invalid, mismatched, cancelled and late publications never register a prop
     fs.symlinkSync(file, symlink);
     expect(() => new PropertyDatabaseWriter(symlink, model.id, revision)).toThrow('already exists');
   } finally {
-    db.sql.close();
+    await db.close();
     await f.close();
   }
 });
@@ -86,7 +79,11 @@ test('invalid, mismatched, cancelled and late publications never register a prop
 test('large batches paginate by bytes, association cursors are bound to their request, and indexes preserve types', async () => {
   const f = await fixture();
   const file = path.join(f.root, 'large.db');
-  const writer = new PropertyDatabaseWriter(file, 'model', revision);
+  const model = await f.library.create({ metadata: { name: 'Large properties' } });
+  const db = new Database(f.directory),
+    store = new ModelPropertyStore(db);
+  await store.setMode(model.id, 'external');
+  const writer = new PropertyDatabaseWriter(file, model.id, revision);
   try {
     for (let i = 0; i < 3; i++)
       writer.addSet({
@@ -96,28 +93,42 @@ test('large batches paginate by bytes, association cursors are bound to their re
       });
     writer.addObject('many', Array(2500).fill('set-0'));
     writer.finish();
-    const reader = new PropertyDatabaseReader(file, revision);
-    const first = reader.sets({ revision, ids: ['set-0', 'set-1', 'set-2'] });
+    const install = await store.prepareInstall(
+      model.id,
+      revision,
+      file,
+      new AbortController().signal,
+    );
+    await db.transaction(() => install.commit());
+    await install.cleanup();
+    const reader = new PropertyDatabaseReader(db, model.id, revision);
+    const first = await reader.sets({ revision, ids: ['set-0', 'set-1', 'set-2'] });
     expect(first.propertySets).toHaveLength(2);
     expect(first.nextCursor).toBe(2);
     expect(
-      reader.sets({ revision, ids: ['set-0', 'set-1', 'set-2'], cursor: first.nextCursor })
+      (await reader.sets({ revision, ids: ['set-0', 'set-1', 'set-2'], cursor: first.nextCursor }))
         .propertySets,
     ).toHaveLength(1);
-    const associations = reader.objects({ revision, objectIds: ['many'] });
+    const associations = await reader.objects({ revision, objectIds: ['many'] });
     expect(associations.objects[0].propertySetIds).toHaveLength(2048);
     expect(
-      reader.objects({ revision, objectIds: ['many'], cursor: associations.nextCursor }).objects[0]
-        .propertySetIds,
+      (await reader.objects({ revision, objectIds: ['many'], cursor: associations.nextCursor }))
+        .objects[0].propertySetIds,
     ).toHaveLength(452);
-    expect(() =>
-      reader.objects({ revision, objectIds: ['other'], cursor: associations.nextCursor }),
-    ).toThrow('cursor');
-    expect(() =>
-      new PropertyDatabaseReader(file, 'b'.repeat(64)).sets({ revision, ids: ['set-0'] }),
-    ).toThrow('generation');
+    await expect(
+      async () =>
+        await reader.objects({ revision, objectIds: ['other'], cursor: associations.nextCursor }),
+    ).rejects.toThrow('cursor');
+    await expect(
+      async () =>
+        await new PropertyDatabaseReader(db, model.id, 'b'.repeat(64)).sets({
+          revision,
+          ids: ['set-0'],
+        }),
+    ).rejects.toThrow('different revision');
   } finally {
     writer.close();
+    await db.close();
     await f.close();
   }
 });

@@ -25,7 +25,7 @@ export const previousConverterRevision = converterProvenance.previousRevision as
 export class ConversionRunner {
   constructor(
     private readonly xeoIFC = new XeoIFCRuntime(),
-    private readonly settings: () => ProcessingSettings = () => ({
+    private readonly settings: () => ProcessingSettings | Promise<ProcessingSettings> = () => ({
       automaticIFC: false,
       paused: false,
       memoryLimitMiB: 2048,
@@ -41,7 +41,7 @@ export class ConversionRunner {
     report: (progress: ProcessingProgress) => void = () => {},
   ): Promise<unknown> {
     const runtime = request.sourceFormat === 'ifc' ? this.xeoIFC.resolve() : undefined;
-    const settings = this.settings();
+    const settings = await this.settings();
     return new Promise((resolve, reject) => {
       const child = fork(path.join(converterDirectory, 'converter.cjs'), [], {
         cwd: inputRoot,

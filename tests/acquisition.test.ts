@@ -39,9 +39,9 @@ test('one-item acquisitions reuse V1 imports, preserve provenance and detect dup
     ).toBe(1);
     expect(await f.library.list()).toHaveLength(2);
     const db = new Database(f.directory);
-    expect(db.sql.prepare('SELECT count(*) AS n FROM model_acquisitions').get()!.n).toBe(2);
-    expect(db.sql.prepare('SELECT count(*) AS n FROM assets').get()!.n).toBe(1);
-    db.sql.close();
+    expect((await db.one('SELECT count(*) AS n FROM model_acquisitions', []))!.n).toBe(2);
+    expect((await db.one('SELECT count(*) AS n FROM assets', []))!.n).toBe(1);
+    await db.close();
     await f.library.delete(model!.id);
     expect((await f.library.validate()).ok).toBe(true);
   } finally {
@@ -143,12 +143,13 @@ test('cancelled and abandoned jobs resume without search or lost transfer accoun
     expect(resumed.downloadedBytes).toBeGreaterThan(gltf.length);
     const db = new Database(f.directory),
       jobs = new AcquisitionJobRepository(db);
-    const abandoned = jobs.create(plan, {});
-    jobs.claim(abandoned.id);
-    db.sql
-      .prepare('UPDATE acquisition_jobs SET owner_json=? WHERE id=?')
-      .run(JSON.stringify({ ...jobs.owner, pid: 99999999 }), abandoned.id);
-    db.sql.close();
+    const abandoned = await jobs.create(plan, {});
+    await jobs.claim(abandoned.id);
+    await db.query('UPDATE acquisition_jobs SET owner_json=$1 WHERE id=$2', [
+      JSON.stringify({ ...jobs.owner, pid: 99999999 }),
+      abandoned.id,
+    ]);
+    await db.close();
     expect((await a.resumeJob(abandoned.id)).status).toBe('completed');
   } finally {
     await f.close();

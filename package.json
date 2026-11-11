@@ -40,10 +40,12 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "2.3.2",
+    "@types/pg": "^8.23.1",
     "commander": "^13.1.0",
     "dockview-vue": "8.3.1",
     "element-plus": "2.8.8",
     "lucide-vue-next": "0.468.0",
+    "pg": "^8.23.1",
     "pinia": "2.3.1",
     "sharp": "0.35.5",
     "stream-json": "3.9.0",
